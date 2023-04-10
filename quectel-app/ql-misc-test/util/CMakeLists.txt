@@ -1,0 +1,51 @@
+# ************ Client program ************
+
+add_executable ( reboot-modem-test reboot-modem-test.c )
+add_executable ( system-sleep-test system-sleep-test.c )
+add_executable ( send-at-tool send-at-tool.c )
+
+target_link_libraries ( reboot-modem-test ql_misc )
+target_link_libraries ( system-sleep-test ql_misc )
+target_link_libraries ( send-at-tool ql_misc )
+
+target_include_directories(reboot-modem-test INTERFACE
+    $<INSTALL_INTERFACE:include/>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/>
+)
+
+target_include_directories(system-sleep-test INTERFACE
+    $<INSTALL_INTERFACE:include/>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/>
+)
+
+target_include_directories(send-at-tool INTERFACE
+    $<INSTALL_INTERFACE:include/>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/>
+)
+
+install(TARGETS reboot-modem-test EXPORT ${EXPORT_TARGETS_NAME}TARGETS
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	FRAMEWORK DESTINATION Frameworks
+	PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+	COMPONENT core
+)
+
+install(TARGETS system-sleep-test EXPORT ${EXPORT_TARGETS_NAME}TARGETS
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	FRAMEWORK DESTINATION Frameworks
+	PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+	COMPONENT core
+)
+
+install(TARGETS send-at-tool EXPORT ${EXPORT_TARGETS_NAME}TARGETS
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	FRAMEWORK DESTINATION Frameworks
+	PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+	COMPONENT core
+)

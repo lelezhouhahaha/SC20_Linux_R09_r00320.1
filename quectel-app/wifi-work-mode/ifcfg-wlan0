@@ -1,0 +1,36 @@
+#Wireless Network adapter RT3070(wlan0) device configure file
+#FILE:/apps/etc/network/ifcfg-wlan0
+
+DEVICE=wlan0
+ONBOOT=yes
+NAME="quectel"
+TYPE=WLAN
+
+#The WiFi Module should work on AP or STA mode
+WORKMODE=AP
+
+#BOOTPROT should be static or dhcp, it will only take effact 
+#when the NIC work on STA mode
+BOOTPROTO=none
+
+#Work on AP mode IP address 
+IPADDR_AP=192.168.5.1
+NETMASK_AP=255.255.255.0
+
+#Work on STA mode IP address 
+IPADDR_STA=192.168.1.166
+NETMASK_STA=255.255.255.0
+
+#Gateway Settings
+GATEWAY=192.168.5.1
+DEFROUTE=no
+
+#DHCP Server configuration, only take effact when the NIC work on AP mode
+DHCP_SERVER=yes
+DHCP_START_IP=192.168.5.10
+DHCP_END_IP=192.168.5.100
+DHCP_NETMASK=255.255.255.0
+DHCP_GATEWAY=192.168.5.1
+DHCP_DNS1=8.8.8.8
+DHCP_DNS2=4.2.2.2
+DHCP_LEASE=18800

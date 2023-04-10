@@ -1,0 +1,189 @@
+From f736ada757299f57f8852faa8f312fc3812ecba3 Mon Sep 17 00:00:00 2001
+From: Chapin Fang <chapin.fang@quectel.com>
+Date: Thu, 8 Oct 2020 08:52:53 +0800
+Subject: [PATCH] =?UTF-8?q?SC20=5FLinux:Chapin:Multimedia:1=E3=80=81?=
+ =?UTF-8?q?=E7=A7=BB=E9=99=A4mp4mux=E4=B8=ADpts=E7=9A=84=E9=99=90=E5=88=B6?=
+ =?UTF-8?q?,=E8=A7=A3=E5=86=B3mp4=E5=BD=95=E5=88=B6=E9=97=AE=E9=A2=98=202?=
+ =?UTF-8?q?=E3=80=81=E6=B7=BB=E5=8A=A0metadata=20rotate=E8=AE=BE=E7=BD=AE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+详述更改原因：1、移除mp4mux中pts的限制,解决mp4录制问题 2、添加metadata rotate设置
+修改点分类  ：内部缺陷修改
+适用哪些项目：
+详述更改内容：
+详述测试方法：软测测试
+软测测试方法：使用命令录制竖屏的mp4:
+              gst-launch-1.0 -e quectelmipisrc device=/dev/video1 ! 'video/x-raw, width=1280, height=720,format=NV21'  ! videoconvert!  omxh264enc  target-bitrate = 1024000  ! h264parse !  mp4mux track-rotate=90 ! filesink location=/data/mpeg.mp4
+硬测测试方法：无
+
+Change-Id: I995d09fe513cb5c2b4d27f4045d03b8a9ccb568f
+---
+ gst/isomp4/atoms.c                        | 32 +++++++++++++++++++
+ gst/isomp4/atoms.h                        |  1 +
+ gst/isomp4/gstqtmux.c                     | 31 +++++++++++++-----
+ gst/isomp4/gstqtmux.h                     |  1 +
+ 4 files changed, 57 insertions(+), 8 deletions(-)
+
+diff --git a/gst/isomp4/atoms.c b/gst/isomp4/atoms.c
+index 8c8b7cb8c..90ec826b5 100755
+--- a/gst/isomp4/atoms.c
++++ b/gst/isomp4/atoms.c
+@@ -3284,6 +3284,38 @@ atom_moov_set_fragmented (AtomMOOV * moov, gboolean fragmented)
+   moov->fragmented = fragmented;
+ }
+ 
++void
++atom_trak_set_rotate (AtomTRAK *trak, guint32 rotate)
++{
++    trak->tkhd.matrix[0] = 0x00010000;
++    trak->tkhd.matrix[1] = 0;
++    trak->tkhd.matrix[3] = 0;
++    trak->tkhd.matrix[4] = 0x00010000;
++    switch (rotate) {
++        case 0:
++            break;
++        case 90:
++            trak->tkhd.matrix[0] = 0;
++            trak->tkhd.matrix[1] = 0x00010000;
++            trak->tkhd.matrix[3] = 0xFFFF0000;
++            trak->tkhd.matrix[4] = 0;
++            break;
++        case 180:
++            trak->tkhd.matrix[0] = 0xFFFF0000;
++            trak->tkhd.matrix[4] = 0xFFFF0000;
++            break;
++        case 270:
++            trak->tkhd.matrix[0] = 0;
++            trak->tkhd.matrix[1] = 0xFFFF0000;
++            trak->tkhd.matrix[3] = 0x00010000;
++            trak->tkhd.matrix[4] = 0;
++            break;
++        default:
++            break;
++    }
++}
++
++
+ void
+ atom_stco64_chunks_set_offset (AtomSTCO64 * stco64, guint32 offset)
+ {
+diff --git a/gst/isomp4/atoms.h b/gst/isomp4/atoms.h
+index c7a5d8b58..e7459eca4 100755
+--- a/gst/isomp4/atoms.h
++++ b/gst/isomp4/atoms.h
+@@ -937,6 +937,7 @@ void       atom_moov_set_fragmented    (AtomMOOV *moov, gboolean fragmented);
+ void       atom_moov_chunks_set_offset (AtomMOOV *moov, guint32 offset);
+ void       atom_moov_add_trak          (AtomMOOV *moov, AtomTRAK *trak);
+ guint      atom_moov_get_trak_count    (AtomMOOV *moov);
++void       atom_trak_set_rotate        (AtomTRAK *trak, guint32 rotate);
+ 
+ guint      atom_framerate_to_timescale (gint fps_n, gint fps_d);
+ 
+diff --git a/gst/isomp4/gstqtmux.c b/gst/isomp4/gstqtmux.c
+index c0c560827..e07b0e6ef 100755
+--- a/gst/isomp4/gstqtmux.c
++++ b/gst/isomp4/gstqtmux.c
+@@ -270,6 +270,7 @@ enum
+   PROP_DO_CTTS,
+   PROP_INTERLEAVE_BYTES,
+   PROP_INTERLEAVE_TIME,
++  PROP_ROTATE,
+ };
+ 
+ /* some spare for header size as well */
+@@ -285,6 +286,7 @@ enum
+ #define DEFAULT_STREAMABLE              TRUE
+ #ifndef GST_REMOVE_DEPRECATED
+ #define DEFAULT_DTS_METHOD              DTS_METHOD_REORDER
++#define DEFAULT_ROTATE         0
+ #endif
+ #define DEFAULT_RESERVED_MAX_DURATION   GST_CLOCK_TIME_NONE
+ #define DEFAULT_RESERVED_MOOV_UPDATE_PERIOD   GST_CLOCK_TIME_NONE
+@@ -493,7 +495,12 @@ gst_qt_mux_class_init (GstQTMuxClass * klass)
+           "Interleave between streams in nanoseconds",
+           0, G_MAXUINT64, DEFAULT_INTERLEAVE_TIME,
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+-
++  g_object_class_install_property (gobject_class, PROP_ROTATE,
++      g_param_spec_uint ("track-rotate", "track rotate",
++          "rotate used to set rotation, defalut is 0, 0, 90 180 270 four rotation can be set",
++          0, G_MAXUINT32, DEFAULT_ROTATE,
++          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
++  
+   gstelement_class->request_new_pad =
+       GST_DEBUG_FUNCPTR (gst_qt_mux_request_new_pad);
+   gstelement_class->change_state = GST_DEBUG_FUNCPTR (gst_qt_mux_change_state);
+@@ -3249,8 +3256,9 @@ gst_qt_mux_add_buffer (GstQTMux * qtmux, GstQTPad * pad, GstBuffer * buf)
+     goto exit;
+   }
+ 
+-  if (!GST_BUFFER_PTS_IS_VALID (last_buf))
+-    goto no_pts;
++  //modified by chapin, remove pts check
++  //if (!GST_BUFFER_PTS_IS_VALID (last_buf))
++   // goto no_pts;
+ 
+   /* if this is the first buffer, store the timestamp */
+   if (G_UNLIKELY (pad->first_ts == GST_CLOCK_TIME_NONE)) {
+@@ -3481,11 +3489,11 @@ fragmented_sample:
+         ("Audio buffer contains fragmented sample."));
+     goto bail;
+   }
+-no_pts:
+-  {
+-    GST_ELEMENT_ERROR (qtmux, STREAM, MUX, (NULL), ("Buffer has no PTS."));
+-    goto bail;
+-  }
++//no_pts:
++ // {
++  //  GST_ELEMENT_ERROR (qtmux, STREAM, MUX, (NULL), ("Buffer has no PTS."));
++   // goto bail;
++  //}
+ not_negotiated:
+   {
+     GST_ELEMENT_ERROR (qtmux, CORE, NEGOTIATION, (NULL),
+@@ -4509,6 +4517,7 @@ gst_qt_mux_video_sink_set_caps (GstQTPad * qtpad, GstCaps * caps)
+   qtpad->trak_ste =
+       (SampleTableEntry *) atom_trak_set_video_type (qtpad->trak,
+       qtmux->context, &entry, rate, ext_atom_list);
++  atom_trak_set_rotate(qtpad->trak, qtmux->rotate);
+   if (strcmp (mimetype, "video/x-prores") == 0) {
+     SampleTableEntryMP4V *mp4v = (SampleTableEntryMP4V *) qtpad->trak_ste;
+     const gchar *compressor = NULL;
+@@ -4931,6 +4940,9 @@ gst_qt_mux_get_property (GObject * object,
+     case PROP_INTERLEAVE_TIME:
+       g_value_set_uint64 (value, qtmux->interleave_time);
+       break;
++    case PROP_ROTATE:
++      g_value_set_uint (value, qtmux->rotate);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+@@ -5016,6 +5028,9 @@ gst_qt_mux_set_property (GObject * object,
+       qtmux->interleave_time = g_value_get_uint64 (value);
+       qtmux->interleave_time_set = TRUE;
+       break;
++    case PROP_ROTATE:
++      qtmux->rotate = g_value_get_uint (value);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+diff --git a/gst/isomp4/gstqtmux.h b/gst/isomp4/gstqtmux.h
+index bfe74054d..ff42a4b75 100755
+--- a/gst/isomp4/gstqtmux.h
++++ b/gst/isomp4/gstqtmux.h
+@@ -266,6 +266,7 @@ struct _GstQTMux
+    * is the active one. See gst_qt_mux_robust_recording_rewrite_moov() */
+   gboolean reserved_moov_first_active;
+ 
++  guint32 rotate;
+   /* Tracking of periodic MOOV updates */
+   GstClockTime last_moov_update;
+   GstClockTime reserved_moov_update_period;
+-- 
+2.23.0
+

@@ -1,0 +1,41 @@
+AC_PREREQ(2.61)
+AC_INIT([lwm2m], 1.0.0)
+AM_INIT_AUTOMAKE([foreign] subdir-objects)
+#AM_INIT_AUTOMAKE(-Wall -Werror subdir-objects)
+AM_MAINTAINER_MODE
+AC_CONFIG_HEADER([config.h])
+AC_CONFIG_MACRO_DIR([m4])
+# Checks for programs.
+AC_PROG_CC
+AM_PROG_CC_C_O
+AC_PROG_LIBTOOL
+AC_PROG_AWK
+AC_PROG_CPP
+AC_PROG_CXX
+AC_PROG_INSTALL
+AC_PROG_LN_S
+AC_PROG_MAKE_SET
+PKG_PROG_PKG_CONFIG
+
+# Checks for libraries.
+
+# Library configs
+
+AC_SUBST([CFLAGS])
+AC_SUBST([CPPFLAGS])
+
+#PKG_CHECK_MODULES([QMI], [qmi])
+#AC_SUBST([QMI_LIBS])
+
+#PKG_CHECK_MODULES([QMIFRAMEWORK], [qmi-framework])
+#AC_SUBST([QMIFRAMEWORK_LIBS])
+
+#PKG_CHECK_MODULES([QLMCMAPI],[ql-mcm-api])
+#AC_SUBST([QLMCMAPI_CFLAGS])
+#AC_SUBST([QLMCMAPI_LIBS])
+
+AC_CONFIG_FILES([ \
+	Makefile \
+        src/Makefile
+])
+AC_OUTPUT

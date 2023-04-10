@@ -1,0 +1,13 @@
+[Unit]
+Description=pm-service
+DefaultDependencies=no
+After=qtid.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/pm-service
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

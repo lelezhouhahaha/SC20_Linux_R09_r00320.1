@@ -1,0 +1,13 @@
+[Unit]
+Description=ql-cpustresstest
+After=ql_manager_server.service
+
+[Service]
+Type=simple
+Restart=always
+ExecStart=/usr/bin/ql-cpustresstest -n 5
+ExecStop=/sbin/start-stop-daemon -K -n /usr/bin/ql-cpustresstest
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target.wants

@@ -1,0 +1,15 @@
+[Unit]
+Description=mcm ril Service
+#Wants=QCMAP_ConnectionManagerd.service
+#After=QCMAP_ConnectionManagerd.service
+
+[Service]
+Type=forking
+#ExecStartPre=/bin/sleep 2
+ExecStart=/etc/init.d/start_mcm_ril_srv_le start
+ExecStop=/etc/init.d/start_mcm_ril_srv_le stop
+RemainAfterExit=yes
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

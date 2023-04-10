@@ -1,0 +1,667 @@
+From 6cab6efb70a82b427337d74eaca6f400f08117ca Mon Sep 17 00:00:00 2001
+From: "les.li" <les.li@quectel.com>
+Date: Wed, 7 Aug 2019 11:07:51 +0800
+Subject: [PATCH] [SC20_Linux]Les: integrated openmax for H264 decoder
+
+Change-Id: I5482d9bcdf4e74fb6deaad800343359af20c6d0e
+---
+ config/bellagio/gstomx.conf               |  27 +++
+ omx/gstomx.c         |  66 +++++--
+ omx/gstomxvideo.c    |   1 +
+ omx/gstomxvideodec.c | 162 ++++++++++++++++--
+ omx/openmax/OMX_IVCommon.h |  17 ++
+ 5 files changed, 245 insertions(+), 28 deletions(-)
+
+diff --git a/config/bellagio/gstomx.conf b/config/bellagio/gstomx.conf
+index 5ca8ba677..3b7f3e158 100755
+--- a/config/bellagio/gstomx.conf
++++ b/config/bellagio/gstomx.conf
+@@ -33,3 +33,30 @@ rank=0
+ in-port-index=0
+ out-port-index=1
+ hacks=event-port-settings-changed-ndata-parameter-swap
++
++[omxh264enc]
++type-name=GstOMXH264Enc
++core-name=/usr/lib/libOmxCore.so
++component-name=OMX.qcom.video.encoder.avc
++rank=257
++in-port-index=0
++out-port-index=1
++hacks=no-disable-outport
++
++[omxh264dec]
++type-name=GstOMXH264Dec
++core-name=/usr/lib/libOmxCore.so
++component-name=OMX.qcom.video.decoder.avc
++rank=257
++in-port-index=0
++out-port-index=1
++hacks=no-disable-outport
++
++[omxmpeg4videodec]
++type-name=GstOMXMPEG4VideoDec
++core-name=/usr/lib/libOmxCore.so
++component-name=OMX.qcom.video.decoder.mpeg4
++rank=257
++in-port-index=0
++out-port-index=1
++hacks=no-disable-outport
+diff --git a/omx/gstomx.c b/omx/gstomx.c
+index 214f6188c..61274c4f7 100755
+--- a/omx/gstomx.c
++++ b/omx/gstomx.c
+@@ -26,6 +26,8 @@
+ 
+ #include <gst/gst.h>
+ #include <string.h>
++#include <fcntl.h>
++#include <stdio.h>
+ 
+ #include "gstomx.h"
+ #include "gstomxmjpegdec.h"
+@@ -51,12 +53,15 @@ GST_DEBUG_CATEGORY (gstomx_debug);
+ 
+ G_LOCK_DEFINE_STATIC (core_handles);
+ static GHashTable *core_handles;
++//FILE *inFile = NULL;  // add by Les
++//FILE *outFile = NULL;
+ 
+ GstOMXCore *
+ gst_omx_core_acquire (const gchar * filename)
+ {
+   GstOMXCore *core;
+-
++  //inFile = fopen("/data/misc/LES_input.h264", "w+"); // add by Les
++  //outFile = fopen("/data/misc/LES_output.yuv", "w+");
+   G_LOCK (core_handles);
+   if (!core_handles)
+     core_handles =
+@@ -145,7 +150,6 @@ gst_omx_core_acquire (const gchar * filename)
+       g_mutex_unlock (&core->lock);
+       goto error;
+     }
+-
+     GST_DEBUG ("Successfully initialized core '%s'", filename);
+   }
+ 
+@@ -197,6 +201,8 @@ gst_omx_core_release (GstOMXCore * core)
+   }
+ 
+   g_mutex_unlock (&core->lock);
++  //fclose(inFile);  // add by Les
++  //fclose(outFile); // add by Les
+ 
+   G_UNLOCK (core_handles);
+ }
+@@ -219,7 +225,7 @@ static void
+ gst_omx_component_handle_messages (GstOMXComponent * comp)
+ {
+   GstOMXMessage *msg;
+-
++  
+   g_mutex_lock (&comp->messages_lock);
+   while ((msg = g_queue_pop_head (&comp->messages))) {
+     g_mutex_unlock (&comp->messages_lock);
+@@ -240,7 +246,7 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+         port = gst_omx_component_get_port (comp, index);
+         if (!port)
+           break;
+-
++		
+         GST_DEBUG_OBJECT (comp->parent, "%s port %u flushed", comp->name,
+             port->index);
+ 
+@@ -258,7 +264,7 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+ 
+         if (error == OMX_ErrorNone)
+           break;
+-
++		
+         GST_ERROR_OBJECT (comp->parent, "%s got error: %s (0x%08x)", comp->name,
+             gst_omx_error_to_string (error), error);
+ 
+@@ -293,7 +299,7 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+         gint i, n;
+         OMX_U32 index = msg->content.port_settings_changed.port;
+         GList *outports = NULL, *l, *k;
+-
++		
+         GST_DEBUG_OBJECT (comp->parent, "%s settings changed (port %u)",
+             comp->name, (guint) index);
+ 
+@@ -339,7 +345,7 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+         port = gst_omx_component_get_port (comp, index);
+         if (!port)
+           break;
+-
++		
+         GST_DEBUG_OBJECT (comp->parent, "%s port %u got buffer flags 0x%08x",
+             comp->name, port->index, (guint) flags);
+         if ((flags & OMX_BUFFERFLAG_EOS)
+@@ -356,6 +362,7 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+ 
+         if (msg->content.buffer_done.empty) {
+           /* Input buffer is empty again and can be used to contain new input */
++		  
+           GST_LOG_OBJECT (port->comp->parent,
+               "%s port %u emptied buffer %p (%p)", port->comp->name,
+               port->index, buf, buf->omx_buf->pBuffer);
+@@ -372,6 +379,7 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+         } else {
+           /* Output buffer contains output now or
+            * the port was flushed */
++		   
+           GST_LOG_OBJECT (port->comp->parent,
+               "%s port %u filled buffer %p (%p)", port->comp->name, port->index,
+               buf, buf->omx_buf->pBuffer);
+@@ -626,6 +634,8 @@ FillBufferDone (OMX_HANDLETYPE hComponent, OMX_PTR pAppData,
+   GstOMXBuffer *buf;
+   GstOMXComponent *comp;
+   GstOMXMessage *msg;
++  
++  //GST_ERROR ("----------- Enter FillBufferDone");  // add by Les
+ 
+   buf = pBuffer->pAppPrivate;
+   if (!buf) {
+@@ -651,7 +661,20 @@ FillBufferDone (OMX_HANDLETYPE hComponent, OMX_PTR pAppData,
+ 
+   GST_LOG_OBJECT (comp->parent, "%s port %u filled buffer %p (%p)", comp->name,
+       buf->port->index, buf, buf->omx_buf->pBuffer);
+-
++  
++  // add by Les
++  GST_ERROR_OBJECT (comp->parent, "%s port %u filled buffer %p (%p), nAllocLen(%u), nOffset(%u), nFilledLen(%u), nSize(%u)", 
++	                    comp->name, buf->port->index, buf, buf->omx_buf->pBuffer, buf->omx_buf->nAllocLen, 
++						buf->omx_buf->nOffset, buf->omx_buf->nFilledLen, buf->omx_buf->nSize); // add by Les
++  /*if(buf->omx_buf->nFilledLen > 0)
++  {
++	  fwrite(buf->omx_buf->pBuffer, 1, buf->omx_buf->nFilledLen, outFile);  // add by Les
++	  //fflush(outFile);
++	  //if(outFile)
++	     //fclose(outFile);  // add by Les
++	  //while(1);
++  }*/
++  
+   gst_omx_component_send_message (comp, msg);
+ 
+   return OMX_ErrorNone;
+@@ -719,8 +742,7 @@ gst_omx_component_new (GstObject * parent, const gchar * core_name,
+     GST_OMX_INIT_STRUCT (&param);
+ 
+     g_strlcpy ((gchar *) param.cRole, component_role, sizeof (param.cRole));
+-    err =
+-        gst_omx_component_set_parameter (comp,
++    err = gst_omx_component_set_parameter (comp,
+         OMX_IndexParamStandardComponentRole, &param);
+ 
+     GST_DEBUG_OBJECT (parent, "Setting component role to '%s': %s (0x%08x)",
+@@ -1279,9 +1301,9 @@ retry:
+    * or buffers are returned to be filled as usual.
+    */
+   if (port->port_def.eDir == OMX_DirInput) {
+-    if (comp->pending_reconfigure_outports) {
++    if (comp->pending_reconfigure_outports) {  // modified by Les for debug
+       gst_omx_component_handle_messages (comp);
+-      while (comp->pending_reconfigure_outports &&
++      while (comp->pending_reconfigure_outports &&  
+           (err = comp->last_error) == OMX_ErrorNone && !port->flushing) {
+         GST_DEBUG_OBJECT (comp->parent,
+             "Waiting for %s output ports to reconfigure", comp->name);
+@@ -1313,8 +1335,9 @@ retry:
+           "%s output port %u needs reconfiguration but has buffers pending",
+           comp->name, port->index);
+       _buf = g_queue_pop_head (&port->pending_buffers);
+-
+-      ret = GST_OMX_ACQUIRE_BUFFER_OK;
++	  
++      ret = GST_OMX_ACQUIRE_BUFFER_RECONFIGURE; // add by Les
++      //ret = GST_OMX_ACQUIRE_BUFFER_OK;
+       goto done;
+     }
+ 
+@@ -1445,9 +1468,16 @@ gst_omx_port_release_buffer (GstOMXPort * port, GstOMXBuffer * buf)
+   buf->used = TRUE;
+ 
+   if (port->port_def.eDir == OMX_DirInput) {
++	  
+     err = OMX_EmptyThisBuffer (comp->handle, buf->omx_buf);
++	//fwrite(buf->omx_buf->pBuffer, 1, buf->omx_buf->nFilledLen, inFile);  // add by Les
++	//fflush(inFile);
++    //fsync(fileno(inFile));
++	//fclose(inFile);  // add by Les
++	//while(1);
++
+   } else {
+-    err = OMX_FillThisBuffer (comp->handle, buf->omx_buf);
++    err = OMX_FillThisBuffer (comp->handle, buf->omx_buf);   // 传递空的bffer给component用于存储解码后的帧
+   }
+   GST_DEBUG_OBJECT (comp->parent, "Released buffer %p to %s port %u: %s "
+       "(0x%08x)", buf, comp->name, port->index, gst_omx_error_to_string (err),
+@@ -1631,7 +1661,7 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
+    * buffers after the port configuration was done and to
+    * update the buffer size
+    */
+-  gst_omx_port_update_port_definition (port, NULL);
++  // gst_omx_port_update_port_definition (port, NULL);  // modified by Les
+ 
+   g_return_val_if_fail (n != -1 || (!buffers
+           && !images), OMX_ErrorBadParameter);
+@@ -1670,6 +1700,8 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
+           l->data);
+       buf->eglimage = TRUE;
+     } else {
++
++	  // 分配内存之前必须将state设置为Idle状态
+       err =
+           OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
+           port->port_def.nBufferSize);
+@@ -1698,7 +1730,7 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
+   gst_omx_component_handle_messages (comp);
+ 
+ done:
+-  gst_omx_port_update_port_definition (port, NULL);
++  //gst_omx_port_update_port_definition (port, NULL);  // modified by Les
+ 
+   GST_INFO_OBJECT (comp->parent, "Allocated buffers for %s port %u: %s "
+       "(0x%08x)", comp->name, port->index, gst_omx_error_to_string (err), err);
+diff --git a/omx/gstomxvideo.c b/omx/gstomxvideo.c
+index 8a42c710a..b481d083d 100755
+--- a/omx/gstomxvideo.c
++++ b/omx/gstomxvideo.c
+@@ -46,6 +46,7 @@ gst_omx_video_get_format_from_omx (OMX_COLOR_FORMATTYPE omx_colorformat)
+       break;
+     case OMX_COLOR_FormatYUV420SemiPlanar:
+     case OMX_COLOR_FormatYUV420PackedSemiPlanar:
++    case OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m:   // add by Les
+       format = GST_VIDEO_FORMAT_NV12;
+       break;
+     case OMX_COLOR_FormatYUV422SemiPlanar:
+diff --git a/omx/gstomxvideodec.c b/omx/gstomxvideodec.c
+index 2fecb8b97..1927a1a3e 100755
+--- a/omx/gstomxvideodec.c
++++ b/omx/gstomxvideodec.c
+@@ -25,6 +25,8 @@
+ #endif
+ 
+ #include <gst/gst.h>
++#include <fcntl.h>
++#include <stdio.h>
+ 
+ #if defined (USE_OMX_TARGET_RPI) && defined(__GNUC__)
+ #ifndef __VCCOREVER__
+@@ -544,6 +546,7 @@ done:
+   return ret;
+ }
+ 
++
+ static OMX_ERRORTYPE
+ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+ {
+@@ -761,6 +764,9 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+   if (!eglimage) {
+     gboolean was_enabled = TRUE;
+ 
++    GST_ERROR_OBJECT (self,
++         "00 min: %u   port_def.nBufferCountActual: %u", min,
++         port->port_def.nBufferCountActual);
+     if (min != port->port_def.nBufferCountActual) {
+       err = gst_omx_port_update_port_definition (port, NULL);
+       if (err == OMX_ErrorNone) {
+@@ -776,7 +782,7 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+       }
+     }
+ 
+-    if (!gst_omx_port_is_enabled (port)) {
++    /*if (!gst_omx_port_is_enabled (port)) {
+       err = gst_omx_port_set_enabled (port, TRUE);
+       if (err != OMX_ErrorNone) {
+         GST_INFO_OBJECT (self,
+@@ -785,7 +791,21 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+         goto done;
+       }
+       was_enabled = FALSE;
+-    }
++    }*/
++	
++    // add by Les : start 
++    /*if(gst_omx_component_get_state (self->dec, GST_CLOCK_TIME_NONE) 
++        != OMX_StateIdle){
++        if (gst_omx_component_set_state (self->dec,
++            OMX_StateIdle) != OMX_ErrorNone)  // 分配内存之前必须将state设置为Idle状态
++        return FALSE;
++    }*/
++	OMX_STATETYPE fles = gst_omx_component_get_state (self->dec, GST_CLOCK_TIME_NONE);
++	GST_ERROR_OBJECT (self,
++            "gst_omx_component_get_state -------- : %s (0x%08x)",
++              gst_omx_state_to_string (fles), fles);
++	  
++	// add by Les : end
+ 
+     err = gst_omx_port_allocate_buffers (port);
+     if (err != OMX_ErrorNone && min > port->port_def.nBufferCountMin) {
+@@ -824,6 +844,30 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+       /* Can't provide buffers downstream in this case */
+       gst_caps_replace (&caps, NULL);
+     }
++	
++    if (!gst_omx_port_is_enabled (port)) {
++      err = gst_omx_port_set_enabled (port, TRUE);
++      if (err != OMX_ErrorNone) {
++        GST_INFO_OBJECT (self,
++            "Failed to enable port: %s (0x%08x)",
++            gst_omx_error_to_string (err), err);
++        goto done;
++      }
++      was_enabled = FALSE;
++    }
++	// add by Les : start 
++	/*if (gst_omx_component_get_state (self->dec,
++            GST_CLOCK_TIME_NONE) != OMX_StateIdle)
++      return FALSE;
++
++    if (gst_omx_component_set_state (self->dec,
++            OMX_StateExecuting) != OMX_ErrorNone)
++      return FALSE;
++
++    if (gst_omx_component_get_state (self->dec,
++            GST_CLOCK_TIME_NONE) != OMX_StateExecuting)
++      return FALSE;  */
++	// add by Les : end
+ 
+     if (err != OMX_ErrorNone) {
+       GST_ERROR_OBJECT (self, "Failed to allocate %d buffers: %s (0x%08x)", min,
+@@ -1264,12 +1308,14 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+   } else if (acq_return == GST_OMX_ACQUIRE_BUFFER_EOS) {
+     goto eos;
+   }
++  	  
+ 
+   if (!gst_pad_has_current_caps (GST_VIDEO_DECODER_SRC_PAD (self)) ||
+       acq_return == GST_OMX_ACQUIRE_BUFFER_RECONFIGURE) {
+     GstVideoCodecState *state;
+     OMX_PARAM_PORTDEFINITIONTYPE port_def;
+     GstVideoFormat format;
++	//acq_return = GST_OMX_ACQUIRE_BUFFER_RECONFIGURE;  // add by Les for debug
+ 
+     GST_DEBUG_OBJECT (self, "Port settings have changed, updating caps");
+ 
+@@ -1279,40 +1325,58 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+       err = gst_omx_port_set_enabled (port, FALSE);
+       if (err != OMX_ErrorNone)
+         goto reconfigure_error;
+-
+-      err = gst_omx_port_wait_buffers_released (port, 5 * GST_SECOND);
++	  
++	  // modify by Les : start
++      err = gst_omx_video_dec_deallocate_output_buffers (self);
+       if (err != OMX_ErrorNone)
+         goto reconfigure_error;
+-
+-      err = gst_omx_video_dec_deallocate_output_buffers (self);
++	
++	 err = gst_omx_port_wait_buffers_released (port, 5 * GST_SECOND);
+       if (err != OMX_ErrorNone)
+         goto reconfigure_error;
++	
++	// modify by Les : end
+ 
+       err = gst_omx_port_wait_enabled (port, 1 * GST_SECOND);
+       if (err != OMX_ErrorNone)
+         goto reconfigure_error;
++	
+     }
+ 
+     if (acq_return == GST_OMX_ACQUIRE_BUFFER_RECONFIGURE) {
+       /* We have the possibility to reconfigure everything now */
++	  //GST_ERROR_OBJECT (self,"########## before gst_omx_video_dec_reconfigure_output_port");
+       err = gst_omx_video_dec_reconfigure_output_port (self);
++	  //GST_ERROR_OBJECT (self,"########## after gst_omx_video_dec_reconfigure_output_port: %s (0x%08x)",
++		  //gst_omx_error_to_string (err), err);
++
++	  //while(1);
+       if (err != OMX_ErrorNone)
+         goto reconfigure_error;
+     } else {
+       /* Just update caps */
+       GST_VIDEO_DECODER_STREAM_LOCK (self);
+-
+-      gst_omx_port_get_port_definition (port, &port_def);
++	    
++      gst_omx_port_get_port_definition (port, &port_def);  	  
++				
+       g_assert (port_def.format.video.eCompressionFormat ==
+           OMX_VIDEO_CodingUnused);
+ 
+       format =
+           gst_omx_video_get_format_from_omx (port_def.format.video.
+           eColorFormat);
++		  
++	  GST_ERROR_OBJECT (self,
++          "Setting output state: format %s (%d), width %u, height %u for port = %u",
++          gst_video_format_to_string (format),
++          port_def.format.video.eColorFormat,
++          (guint) port_def.format.video.nFrameWidth,
++          (guint) port_def.format.video.nFrameHeight,
++		  port->index);
+ 
+       if (format == GST_VIDEO_FORMAT_UNKNOWN) {
+-        GST_ERROR_OBJECT (self, "Unsupported color format: %d",
+-            port_def.format.video.eColorFormat);
++        GST_ERROR_OBJECT (self, "Unsupported color format: %d for port = %u",
++            port_def.format.video.eColorFormat, port->index);
+         if (buf)
+           gst_omx_port_release_buffer (port, buf);
+         GST_VIDEO_DECODER_STREAM_UNLOCK (self);
+@@ -1496,6 +1560,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+       }
+     }
+   } else if (frame != NULL) {
++	GST_ERROR_OBJECT (self, "gst_video_decoder_drop_frame");
+     flow_ret = gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
+     frame = NULL;
+   }
+@@ -1505,6 +1570,16 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+   GST_DEBUG_OBJECT (self, "Finished frame: %s", gst_flow_get_name (flow_ret));
+ 
+   if (buf) {
++	
++    // add by Les	
++    GST_ERROR_OBJECT (self,
++          "decoder EBD(%p) size=%u nFilledLen = %u offset = %u AllocLen = %u",
++          buf->omx_buf,
++          (guint) buf->omx_buf->nSize,
++          (guint) buf->omx_buf->nFilledLen,
++          (guint) buf->omx_buf->nOffset,
++          (guint) buf->omx_buf->nAllocLen);
++		  
+     err = gst_omx_port_release_buffer (port, buf);
+     if (err != OMX_ErrorNone)
+       goto release_error;
+@@ -1622,6 +1697,7 @@ reconfigure_error:
+     gst_pad_pause_task (GST_VIDEO_DECODER_SRC_PAD (self));
+     self->downstream_flow_ret = GST_FLOW_ERROR;
+     self->started = FALSE;
++    //while(1);
+     return;
+   }
+ 
+@@ -1728,6 +1804,7 @@ static gboolean
+ gst_omx_video_dec_negotiate (GstOMXVideoDec * self)
+ {
+   OMX_VIDEO_PARAM_PORTFORMATTYPE param;
++  OMX_PARAM_PORTDEFINITIONTYPE port_def;
+   OMX_ERRORTYPE err;
+   GstCaps *comp_supported_caps;
+   GList *negotiation_map = NULL, *l;
+@@ -1812,7 +1889,28 @@ gst_omx_video_dec_negotiate (GstOMXVideoDec * self)
+     GST_ERROR_OBJECT (self, "Failed to set video port format: %s (0x%08x)",
+         gst_omx_error_to_string (err), err);
+   }
+-
++  
++  // add by Les
++  /*GST_ERROR_OBJECT (self, "Updating outport port definition");
++  gst_omx_port_get_port_definition (self->dec_out_port, &port_def);  // 获取  out_port port_def参数值
++  GST_ERROR_OBJECT (self, "0 -----------Failed to set video port format: (0x%08x)",
++	  port_def.format.video.eColorFormat);
++  port_def.format.video.eColorFormat = param.eColorFormat;
++  GST_ERROR_OBJECT (self, "1 -----------Failed to set video port format: (0x%08x)",
++	  port_def.format.video.eColorFormat);
++  if (gst_omx_port_update_port_definition (self->dec_out_port,
++          &port_def) != OMX_ErrorNone)
++  {
++	  gst_omx_port_get_port_definition (self->dec_out_port, &port_def);  // 获取  out_port port_def参数值
++	  GST_ERROR_OBJECT (self, "Failed to set video port format: (0x%08x)",
++	  port_def.format.video.eColorFormat);
++	  return FALSE;
++  }
++  
++  gst_omx_port_get_port_definition (self->dec_out_port, &port_def);  // 获取  out_port port_def参数值
++	  GST_ERROR_OBJECT (self, "2-----------Failed to set video port format: (0x%08x)",
++	  port_def.format.video.eColorFormat);*/
++	
+   gst_caps_unref (intersection);
+   return (err == OMX_ErrorNone);
+ }
+@@ -1834,6 +1932,11 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
+   GST_DEBUG_OBJECT (self, "Setting new caps %" GST_PTR_FORMAT, state->caps);
+ 
+   gst_omx_port_get_port_definition (self->dec_in_port, &port_def);
++  
++  GST_ERROR_OBJECT (self, "GET input port definition width = %d height = %d m_nFramerate = %d m_nBitrate = %d m_nOutputBufferCount = %d m_nOutputBufferSize = %d\n",
++                port_def.format.video.nFrameWidth, port_def.format.video.nFrameHeight, 
++				port_def.format.video.xFramerate, port_def.format.video.nBitrate, 
++				port_def.nBufferCountActual, port_def.nBufferSize);
+ 
+   /* Check if the caps change is a real format change or if only irrelevant
+    * parts of the caps have changed or nothing at all.
+@@ -1969,6 +2072,7 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
+   if (gst_omx_port_update_port_definition (self->dec_in_port,
+           &port_def) != OMX_ErrorNone)
+     return FALSE;
++	
+ 
+   if (klass->set_format) {
+     if (!klass->set_format (self, self->dec_in_port, state)) {
+@@ -1981,6 +2085,13 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
+   if (gst_omx_port_update_port_definition (self->dec_out_port,
+           NULL) != OMX_ErrorNone)
+     return FALSE;
++	
++ GST_ERROR_OBJECT (self, "GET Out port definition width = %d height = %d eColorFormat = %d m_nOutputBufferCount = %d m_nOutputBufferSize = %d\n",
++                self->dec_out_port->port_def.format.video.nFrameWidth, 
++				self->dec_out_port->port_def.format.video.nFrameHeight, 
++				self->dec_out_port->port_def.format.video.eColorFormat,  
++				self->dec_out_port->port_def.nBufferCountActual, 
++				self->dec_out_port->port_def.nBufferSize);
+ 
+   gst_buffer_replace (&self->codec_data, state->codec_data);
+   self->input_state = gst_video_codec_state_ref (state);
+@@ -2012,6 +2123,9 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
+   } else {
+     if (!gst_omx_video_dec_negotiate (self))
+       GST_LOG_OBJECT (self, "Negotiation failed, will get output format later");
++  
++    //gst_omx_port_update_port_definition (self->dec_in_port, NULL);  // added by Les
++	//gst_omx_port_update_port_definition (self->dec_out_port, NULL);  // added by Les
+ 
+     if (!(klass->cdata.hacks & GST_OMX_HACK_NO_DISABLE_OUTPORT)) {
+       /* Disable output port */
+@@ -2025,6 +2139,7 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
+       if (gst_omx_component_set_state (self->dec,
+               OMX_StateIdle) != OMX_ErrorNone)
+         return FALSE;
++		
+ 
+       /* Need to allocate buffers to reach Idle state */
+       if (gst_omx_port_allocate_buffers (self->dec_in_port) != OMX_ErrorNone)
+@@ -2039,8 +2154,10 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
+         return FALSE;
+       if (gst_omx_port_allocate_buffers (self->dec_out_port) != OMX_ErrorNone)
+         return FALSE;
++	 
+     }
+ 
++    // modified by Les
+     if (gst_omx_component_get_state (self->dec,
+             GST_CLOCK_TIME_NONE) != OMX_StateIdle)
+       return FALSE;
+@@ -2188,6 +2305,9 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
+   duration = frame->duration;
+ 
+   if (self->downstream_flow_ret != GST_FLOW_OK) {
++	
++	GST_ERROR_OBJECT (self, "downstream_flow_ret: %s",
++          gst_flow_get_name (self->downstream_flow_ret));  // add by Les
+     gst_video_codec_frame_unref (frame);
+     return self->downstream_flow_ret;
+   }
+@@ -2207,6 +2327,11 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
+   port = self->dec_in_port;
+ 
+   size = gst_buffer_get_size (frame->input_buffer);
++  
++  // add by Les : start
++  GST_ERROR_OBJECT (self, "input buffer size: %u  offset: %u",
++          size, offset);
++  
+   while (offset < size) {
+     /* Make sure to release the base class stream lock, otherwise
+      * _loop() can't call _finish_frame() and we might block forever
+@@ -2330,9 +2455,24 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
+      * by the port */
+     buf->omx_buf->nFilledLen =
+         MIN (size - offset, buf->omx_buf->nAllocLen - buf->omx_buf->nOffset);
++	GST_ERROR_OBJECT (self, "size(%u), offset(%u), nAllocLen(%u), nOffset(%u), nFilledLen(%u)", 
++	                        size, offset, buf->omx_buf->nAllocLen, buf->omx_buf->nOffset, buf->omx_buf->nFilledLen); // add by Les
++	
+     gst_buffer_extract (frame->input_buffer, offset,
+         buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
+         buf->omx_buf->nFilledLen);
++	
++	//FILE *inFile = NULL;  // add by Les
++	//inFile = fopen("/data/misc/LES01_input.h264", "w+"); // add by Les
++	//guint8 *ptr = malloc(size);
++	//gst_buffer_extract (frame->input_buffer, offset, ptr, buf->omx_buf->nFilledLen);   // 把Frame中的数据拷贝到ptr存储
++	//fwrite(ptr, 1, size, inFile);  // add by Les
++	//fwrite(buf->omx_buf->pBuffer, 1, buf->omx_buf->nFilledLen, inFile);  // add by Les
++	//if(inFile)
++	//	fclose(inFile);
++	//if(ptr)
++	//	free(ptr);
++	//while(1);
+ 
+     if (timestamp != GST_CLOCK_TIME_NONE) {
+       GST_OMX_SET_TICKS (buf->omx_buf->nTimeStamp,
+diff --git a/omx/openmax/OMX_IVCommon.h b/omx/openmax/OMX_IVCommon.h
+index 4c4995ce0..44d7c444e 100755
+--- a/omx/openmax/OMX_IVCommon.h
++++ b/omx/openmax/OMX_IVCommon.h
+@@ -132,6 +132,23 @@ typedef enum OMX_COLOR_FORMATTYPE {
+     OMX_COLOR_Format24BitABGR6666,
+     OMX_COLOR_FormatKhronosExtensions = 0x6F000000, /**< Reserved region for introducing Khronos Standard Extensions */ 
+     OMX_COLOR_FormatVendorStartUnused = 0x7F000000, /**< Reserved region for introducing Vendor Extensions */
++	
++	/******************* add by Les: start **********************/
++	/**<Reserved android opaque colorformat. Tells the encoder that
++     * the actual colorformat will be  relayed by the
++     * Gralloc Buffers.
++     * FIXME: In the process of reserving some enum values for
++     * Android-specific OMX IL colorformats. Change this enum to
++     * an acceptable range once that is done.
++     * */
++    OMX_COLOR_FormatAndroidOpaque = 0x7F000789,
++    OMX_TI_COLOR_FormatYUV420PackedSemiPlanar = 0x7F000100,
++    OMX_QCOM_COLOR_FormatYVU420SemiPlanar = 0x7FA30C00,
++    OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar64x32Tile2m8ka = 0x7FA30C03,
++    OMX_SEC_COLOR_FormatNV12Tiled = 0x7FC00002,
++    OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m = 0x7FA30C04,
++	/******************* add by Les: end **********************/
++	
+     OMX_COLOR_FormatMax = 0x7FFFFFFF
+ } OMX_COLOR_FORMATTYPE;
+ 
+-- 
+2.23.0
+

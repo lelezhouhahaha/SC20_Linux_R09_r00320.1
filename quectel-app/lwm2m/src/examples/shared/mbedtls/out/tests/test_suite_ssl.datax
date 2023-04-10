@@ -1,0 +1,60 @@
+SSL DTLS replay: initial state, seqnum 0
+0:hex:"":hex:"000000000000":int:0
+
+SSL DTLS replay: 0 seen, 1 arriving
+0:hex:"000000000000":hex:"000000000001":int:0
+
+SSL DTLS replay: 0 seen, 0 replayed
+0:hex:"000000000000":hex:"000000000000":exp:0
+
+SSL DTLS replay: 0-1 seen, 2 arriving
+0:hex:"000000000000000000000001":hex:"000000000002":int:0
+
+SSL DTLS replay: 0-1 seen, 1 replayed
+0:hex:"000000000000000000000001":hex:"000000000001":exp:0
+
+SSL DTLS replay: 0-1 seen, 0 replayed
+0:hex:"000000000000000000000001":hex:"000000000000":exp:0
+
+SSL DTLS replay: new
+0:hex:"abcd12340000abcd12340001abcd12340003":hex:"abcd12340004":int:0
+
+SSL DTLS replay: way new
+0:hex:"abcd12340000abcd12340001abcd12340003":hex:"abcd12350000":int:0
+
+SSL DTLS replay: delayed
+0:hex:"abcd12340000abcd12340001abcd12340003":hex:"abcd12340002":int:0
+
+SSL DTLS replay: lastest replayed
+0:hex:"abcd12340000abcd12340001abcd12340003":hex:"abcd12340003":exp:0
+
+SSL DTLS replay: older replayed
+0:hex:"abcd12340000abcd12340001abcd12340003":hex:"abcd12340001":exp:0
+
+SSL DTLS replay: most recent in window, replayed
+0:hex:"abcd12340000abcd12340002abcd12340003":hex:"abcd12340002":exp:0
+
+SSL DTLS replay: oldest in window, replayed
+0:hex:"abcd12340000abcd12340001abcd1234003f":hex:"abcd12340000":exp:0
+
+SSL DTLS replay: oldest in window, not replayed
+0:hex:"abcd12340001abcd12340002abcd1234003f":hex:"abcd12340000":int:0
+
+SSL DTLS replay: just out of the window
+0:hex:"abcd12340001abcd12340002abcd1234003f":hex:"abcd1233ffff":exp:0
+
+SSL DTLS replay: way out of the window
+0:hex:"abcd12340001abcd12340002abcd1234003f":hex:"abcd12330000":exp:0
+
+SSL DTLS replay: big jump then replay
+0:hex:"abcd12340000abcd12340100":hex:"abcd12340100":exp:0
+
+SSL DTLS replay: big jump then new
+0:hex:"abcd12340000abcd12340100":hex:"abcd12340101":int:0
+
+SSL DTLS replay: big jump then just delayed
+0:hex:"abcd12340000abcd12340100":hex:"abcd123400ff":int:0
+
+SSL SET_HOSTNAME memory leak: call ssl_set_hostname twice
+1:char*:"server0":char*:"server1"
+

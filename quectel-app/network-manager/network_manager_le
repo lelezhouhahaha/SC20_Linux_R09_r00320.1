@@ -1,0 +1,26 @@
+#! /bin/sh
+
+set -e
+
+case "$1" in
+start)
+    echo -n "Starting network-manager: "
+    start-stop-daemon -S -b -a /usr/bin/network-manager
+    echo "done"
+    ;;
+  stop)
+    echo -n "Stopping network-manager: "
+    start-stop-daemon -K -n /usr/bin/network-manager
+    echo "done"
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  *)
+    echo "Usage network-manager { start | stop | restart }" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

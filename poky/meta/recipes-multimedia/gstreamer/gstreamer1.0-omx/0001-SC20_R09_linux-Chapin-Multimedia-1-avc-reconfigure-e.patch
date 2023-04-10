@@ -1,0 +1,167 @@
+From 6216e0cd78da84fa9f40b4955002eac6dbf91524 Mon Sep 17 00:00:00 2001
+From: Chapin Fang <chapin.fang@quectel.com>
+Date: Thu, 2 Apr 2020 18:44:31 +0800
+Subject: [PATCH 1/2] =?UTF-8?q?SC20=5FR09=5Flinux:Chapin:Multimedia:=201?=
+ =?UTF-8?q?=E3=80=81=E8=A7=A3=E5=86=B3avc=E6=92=AD=E6=94=BE=E6=A6=82?=
+ =?UTF-8?q?=E7=8E=87=E5=87=BA=E9=94=99(reconfigure=20error)=202=E3=80=81?=
+ =?UTF-8?q?=E7=A7=BB=E9=99=A4omx=E9=85=8D=E7=BD=AE=E4=B8=ADmpeg-4=E7=9A=84?=
+ =?UTF-8?q?=E8=A7=A3=E7=A0=81?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+详述更改原因：1、解决avc播放概率出错(reconfigure error) 2、移除omx配置中mpeg-4的解码
+修改点分类  ：内部缺陷修改
+适用哪些项目：该项目
+详述更改内容：1、解决avc播放概率出错(reconfigure error) 2、移除omx配置中mpeg-4的解码
+详述测试方法：无需测试
+软测测试方法：无需测试
+硬测测试方法：无需测试
+
+Change-Id: Ib44bccf967a4789b58f143d51b9e6418e8fbf7fd
+---
+ config/bellagio/gstomx.conf               | 16 +++---
+ omx/gstomx.c         |  1 +
+ omx/gstomxvideodec.c | 54 ++++++-------------
+ 3 files changed, 24 insertions(+), 47 deletions(-)
+
+diff --git a/config/bellagio/gstomx.conf b/config/bellagio/gstomx.conf
+index 3b7f3e158..41229c9c1 100755
+--- a/config/bellagio/gstomx.conf
++++ b/config/bellagio/gstomx.conf
+@@ -52,11 +52,11 @@ in-port-index=0
+ out-port-index=1
+ hacks=no-disable-outport
+ 
+-[omxmpeg4videodec]
+-type-name=GstOMXMPEG4VideoDec
+-core-name=/usr/lib/libOmxCore.so
+-component-name=OMX.qcom.video.decoder.mpeg4
+-rank=257
+-in-port-index=0
+-out-port-index=1
+-hacks=no-disable-outport
++#[omxmpeg4videodec]
++#type-name=GstOMXMPEG4VideoDec
++#core-name=/usr/lib/libOmxCore.so
++#component-name=OMX.qcom.video.decoder.mpeg4
++#rank=257
++#in-port-index=0
++#out-port-index=1
++#hacks=no-disable-outport
+diff --git a/omx/gstomx.c b/omx/gstomx.c
+index 13f878f3b..60f5f0305 100755
+--- a/omx/gstomx.c
++++ b/omx/gstomx.c
+@@ -358,6 +358,7 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+         GstOMXBuffer *buf = msg->content.buffer_done.buffer->pAppPrivate;
+         GstOMXPort *port;
+ 
++//检测到OMX_EventPortSettingsChanged,后回去free Ouput put buffer, it will be null
+         if (buf == NULL)
+         {
+            GST_ERROR_OBJECT (comp->parent, "buf is null, don't push to pending buffer");
+diff --git a/omx/gstomxvideodec.c b/omx/gstomxvideodec.c
+index 87c469656..b46922bc9 100755
+--- a/omx/gstomxvideodec.c
++++ b/omx/gstomxvideodec.c
+@@ -782,31 +782,9 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+       }
+     }
+ 
+-    /*if (!gst_omx_port_is_enabled (port)) {
+-      err = gst_omx_port_set_enabled (port, TRUE);
+-      if (err != OMX_ErrorNone) {
+-        GST_INFO_OBJECT (self,
+-            "Failed to enable port: %s (0x%08x)",
+-            gst_omx_error_to_string (err), err);
+-        goto done;
+-      }
+-      was_enabled = FALSE;
+-    }*/
+-	
+     // add by Les : start 
+-    /*if(gst_omx_component_get_state (self->dec, GST_CLOCK_TIME_NONE) 
+-        != OMX_StateIdle){
+-        if (gst_omx_component_set_state (self->dec,
+-            OMX_StateIdle) != OMX_ErrorNone)  // 分配内存之前必须将state设置为Idle状态
+-        return FALSE;
+-    }*/
+-	OMX_STATETYPE fles = gst_omx_component_get_state (self->dec, GST_CLOCK_TIME_NONE);
+-	GST_ERROR_OBJECT (self,
+-            "gst_omx_component_get_state -------- : %s (0x%08x)",
+-              gst_omx_state_to_string (fles), fles);
+-	  
+-	// add by Les : end
+-
++    // modify by chapin
++    // keep OMX_StateExecuting
+     err = gst_omx_port_allocate_buffers (port);
+     if (err != OMX_ErrorNone && min > port->port_def.nBufferCountMin) {
+       GST_ERROR_OBJECT (self,
+@@ -845,16 +823,6 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+       gst_caps_replace (&caps, NULL);
+     }
+ 	
+-    if (!gst_omx_port_is_enabled (port)) {
+-      err = gst_omx_port_set_enabled (port, TRUE);
+-      if (err != OMX_ErrorNone) {
+-        GST_INFO_OBJECT (self,
+-            "Failed to enable port: %s (0x%08x)",
+-            gst_omx_error_to_string (err), err);
+-        goto done;
+-      }
+-      was_enabled = FALSE;
+-    }
+ 	// add by Les : start 
+ 	/*if (gst_omx_component_get_state (self->dec,
+             GST_CLOCK_TIME_NONE) != OMX_StateIdle)
+@@ -868,15 +836,25 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+             GST_CLOCK_TIME_NONE) != OMX_StateExecuting)
+       return FALSE;  */
+ 	// add by Les : end
+-
+     if (err != OMX_ErrorNone) {
+       GST_ERROR_OBJECT (self, "Failed to allocate %d buffers: %s (0x%08x)", min,
+           gst_omx_error_to_string (err), err);
+       goto done;
+     }
+ 
++    if (!gst_omx_port_is_enabled (port)) {
++      err = gst_omx_port_set_enabled (port, TRUE);
++      if (err != OMX_ErrorNone) {
++        GST_INFO_OBJECT (self,
++            "Failed to enable port: %s (0x%08x)",
++            gst_omx_error_to_string (err), err);
++        goto done;
++      }
++      was_enabled = FALSE;
++    }
++
+     if (!was_enabled) {
+-      err = gst_omx_port_wait_enabled (port, 2 * GST_SECOND);
++      err = gst_omx_port_wait_enabled (port, 5 * GST_SECOND);
+       if (err != OMX_ErrorNone) {
+         GST_ERROR_OBJECT (self,
+             "Failed to wait until port is enabled: %s (0x%08x)",
+@@ -884,8 +862,6 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
+         goto done;
+       }
+     }
+-
+-
+   }
+ 
+   err = OMX_ErrorNone;
+@@ -1336,7 +1312,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+ 	
+ 	// modify by Les : end
+ 
+-      err = gst_omx_port_wait_enabled (port, 1 * GST_SECOND);
++      err = gst_omx_port_wait_enabled (port, 5 * GST_SECOND);  //wait enable success
+       if (err != OMX_ErrorNone)
+         goto reconfigure_error;
+ 	
+-- 
+2.23.0
+

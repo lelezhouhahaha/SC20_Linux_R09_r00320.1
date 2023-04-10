@@ -1,0 +1,13 @@
+[Unit]
+Description=Default NV settings service
+
+[Service]
+Type=oneshot
+#ExecStartPre=/bin/sleep 6
+ExecStart=/usr/bin/ql-nv-settings 1
+#ExecStop=/sbin/start-stop-daemon -K -n ql-nv-settings
+Restart=no
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

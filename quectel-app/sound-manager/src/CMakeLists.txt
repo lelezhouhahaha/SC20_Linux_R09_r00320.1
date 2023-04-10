@@ -1,0 +1,37 @@
+set (SRC_FILES
+	wav.c
+    linked_list.c
+    main.c
+)
+
+include_directories (
+    ${PROJECT_SOURCE_DIR}/src
+)
+
+add_executable (sound-manager ${SRC_FILES})
+
+target_include_directories(sound-manager INTERFACE
+    $<INSTALL_INTERFACE:include/>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/>
+)
+
+target_link_libraries(sound-manager
+    ${CMAKE_THREAD_LIBS_INIT}
+	${ALSA_INTF_LIBS}
+    ${QLMISC_LIBS}
+    ${QLRIL_LIBS}
+    ${CUTILS_LIBS}
+    ${UTILS_LIBS}
+    ${LOG_LIBS}
+	${FILEPARSER_LIBS}
+	${QAUDIO_LIBS}
+)
+
+install(TARGETS sound-manager EXPORT ${EXPORT_TARGETS_NAME}TARGETS
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    FRAMEWORK DESTINATION Frameworks
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+    COMPONENT core
+)

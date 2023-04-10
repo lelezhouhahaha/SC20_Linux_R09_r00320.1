@@ -1,0 +1,10 @@
+# Data proprietary source Packages
+IMAGE_INSTALL += "qtbase"
+IMAGE_INSTALL += "qt5-fonts"
+IMAGE_INSTALL += "qtmultimedia"
+IMAGE_INSTALL += "qtdeclarative"
+IMAGE_INSTALL += "qtquickcontrols"
+IMAGE_INSTALL += "qtquickcontrols2"
+IMAGE_INSTALL += "qtquickcontrols2-dev"
+IMAGE_INSTALL += "qtquickcontrols2-mkspecs"
+IMAGE_INSTALL += "qtvirtualkeyboard"

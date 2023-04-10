@@ -1,0 +1,13 @@
+[Unit]
+Description=Set Bt MAC
+DefaultDependencies=no
+After=btproperty.service
+
+[Service]
+RemainAfterExit=yes
+Restart=no
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/bin/setbtmac
+
+[Install]
+WantedBy=multi-user.target

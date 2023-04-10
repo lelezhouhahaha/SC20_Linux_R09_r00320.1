@@ -1,0 +1,32 @@
+#! /bin/sh
+#
+#Copyright (c) 2020 Quectel Wireless Solutions Co., Ltd. All Rights Reserved.
+#Qualcomm Technologies Proprietary and Confidential.
+
+# pm-service init.d script to start the pm-service daemon
+
+set -e
+
+case "$1" in
+  start)
+        echo -n  "Starting pm service: " > /dev/kmsg
+		start-stop-daemon -S -b --exec /usr/bin/pm-service
+		echo "done" > /dev/kmsg
+		setprop sys.boot_completed 1
+		;;
+  stop)
+        echo -n "Stopping pm service: " > /dev/kmsg
+        start-stop-daemon -K -n pm-service
+        echo "done" > /dev/kmsg
+        ;;
+  restart)
+        $0 stop
+        $0 start
+        ;;
+  *)
+        echo "Usage $0 { start | stop | restart}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

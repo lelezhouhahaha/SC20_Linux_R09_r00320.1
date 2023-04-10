@@ -1,0 +1,132 @@
+From 1cf41b5937da1b25543a5780ac2b1e0a357b7e5e Mon Sep 17 00:00:00 2001
+From: Chapin Fang <chapin.fang@quectel.com>
+Date: Wed, 26 Feb 2020 13:18:11 +0800
+Subject: [PATCH] =?UTF-8?q?SC20=5FR09=5Flinux:Chapin:Multimedia:1=E3=80=81?=
+ =?UTF-8?q?=E8=A7=A3=E5=86=B3omxh264enc=E4=B8=AD=E5=AF=B9=E9=BD=90?=
+ =?UTF-8?q?=E6=95=B0=E6=8D=AE=E9=97=AE=E9=A2=98=202=E3=80=81=E4=BC=98?=
+ =?UTF-8?q?=E5=8C=96=E5=BD=95=E5=83=8F=E5=B8=A7=E7=8E=87?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+详述更改原因：1、解决omxh264enc中对齐数据问题 2、优化录像帧率
+修改点分类  ：内部缺陷修改
+适用哪些项目：该项目
+详述更改内容：1、解决omxh264enc中对齐数据问题 2、优化录像帧率
+详述测试方法：无
+软测测试方法：无
+硬测测试方法：无
+
+Change-Id: I616968dd7072c292489fa2007a0e1c412fad8ae2
+---
+ omx/gstomxvideoenc.c | 54 ++++++++++++++++++-
+ 1 files changed, 23 insertions(+), 12 deletions(-)
+
+diff --git a/omx/gstomxvideoenc.c b/omx/gstomxvideoenc.c
+index 7f7581e1e..0b8e0af38 100755
+--- a/omx/gstomxvideoenc.c
++++ b/omx/gstomxvideoenc.c
+@@ -38,6 +38,41 @@ GST_DEBUG_CATEGORY_STATIC (gst_omx_video_enc_debug_category);
+ #define GST_CAT_DEFAULT gst_omx_video_enc_debug_category
+ 
+ #define GST_TYPE_OMX_VIDEO_ENC_CONTROL_RATE (gst_omx_video_enc_control_rate_get_type ())
++//stride align 128, scanlines align 32
++#ifndef MSM_MEDIA_ALIGN
++#define MSM_MEDIA_ALIGN(__sz, __align) (((__sz) + (__align-1)) & (~(__align-1)))
++#endif
++
++#ifndef MSM_MEDIA_MAX
++#define MSM_MEDIA_MAX(__a, __b) ((__a) > (__b)?(__a):(__b))
++#endif
++
++//refer to kernel/include/media/msm_media_info.h VENUS_BUFFER_SIZE
++static inline unsigned int GST_VENUS_BUFFER_SIZE(int color_fmt, int width, int height)
++{
++    unsigned int uv_alignment = 0, size = 0;
++    unsigned int y_plane, uv_plane, y_stride, uv_stride, y_sclines, uv_sclines;
++    switch (color_fmt)
++    {
++        case OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m:  //NV12 NV21
++            y_stride = MSM_MEDIA_ALIGN(width, 128);
++            uv_stride = MSM_MEDIA_ALIGN(width, 128);
++            y_sclines = MSM_MEDIA_ALIGN(height, 32);
++            uv_stride = MSM_MEDIA_ALIGN(height / 2, 32);
++            uv_alignment = 4096;
++            y_plane = y_stride * y_sclines;
++            uv_plane = uv_stride * uv_sclines + uv_alignment;
++            size = y_plane + uv_plane +
++                MSM_MEDIA_MAX(16*1024, 8 * y_stride);
++            size = MSM_MEDIA_ALIGN(size, 4096);
++            break;
++        default:
++            break;
++    }
++
++    return size;
++}
++
+ static GType
+ gst_omx_video_enc_control_rate_get_type (void)
+ {
+@@ -1051,18 +1086,26 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
+   }
+ 
+   port_def.format.video.nFrameWidth = info->width;
++  port_def.format.video.nFrameHeight = info->height;
++
++//modified by chapin 根据编码器自身需要的对齐数据来改
++#if 0
+   if (port_def.nBufferAlignment)
+     port_def.format.video.nStride =
+         GST_ROUND_UP_N (info->width, port_def.nBufferAlignment);
+   else
+     port_def.format.video.nStride = GST_ROUND_UP_4 (info->width);       /* safe (?) default */
+ 
+-  port_def.format.video.nFrameHeight = info->height;
+ 
+   if (klass->cdata.hacks & GST_OMX_HACK_HEIGHT_MULTIPLE_16)
+     port_def.format.video.nSliceHeight = GST_ROUND_UP_16 (info->height);
+   else
+     port_def.format.video.nSliceHeight = info->height;
++#else
++    port_def.format.video.nStride = MSM_MEDIA_ALIGN (info->width, 128);       /* safe (?) default */
++    port_def.format.video.nSliceHeight = MSM_MEDIA_ALIGN (info->height, 32);
++#endif
++ 
+ 
+   switch (port_def.format.video.eColorFormat) {
+     case OMX_COLOR_FormatYUV420Planar:
+@@ -1076,10 +1119,15 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
+     case OMX_COLOR_FormatYUV420PackedSemiPlanar:
+     case OMX_COLOR_FormatYUV420SemiPlanar:
+     case OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m: //add by chapin for omx h264 enc color format
++//modify by chapin
++#if 0
+       port_def.nBufferSize =
+           (port_def.format.video.nStride * port_def.format.video.nFrameHeight) +
+           (port_def.format.video.nStride *
+           ((port_def.format.video.nFrameHeight + 1) / 2));
++#else
++      port_def.nBufferSize = GST_VENUS_BUFFER_SIZE((int) OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m, info->width, info->height);
++#endif
+       break;
+ 
+     default:
+@@ -1088,6 +1136,8 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
+       g_assert_not_reached ();
+   }
+ 
++   GST_DEBUG_OBJECT (self, "port_def.nBufferSize = %d", port_def.nBufferSize);
++
+   if (info->fps_n == 0) {
+     port_def.format.video.xFramerate = 0;
+   } else {
+@@ -1167,7 +1217,7 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
+           gst_omx_error_to_string (err), err);
+   }
+ 
+-  GST_DEBUG_OBJECT (self, "Enabling component");
++  GST_DEBUG_OBJECT (self, "Enabling component needs_disable = %d", needs_disable);
+   if (needs_disable) {
+     if (gst_omx_port_set_enabled (self->enc_in_port, TRUE) != OMX_ErrorNone)
+       return FALSE;

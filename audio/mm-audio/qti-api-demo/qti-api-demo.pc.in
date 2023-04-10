@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: qti-api-demo
+Description: qti-api-demo library
+Version: @VERSION@
+Libs: -L${libdir} -lqti-api-demo
+Cflags: -I${includedir}/qti-api-demo

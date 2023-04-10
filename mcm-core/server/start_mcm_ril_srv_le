@@ -1,0 +1,33 @@
+#! /bin/sh
+#
+#Copyright (c) 2013 Qualcomm Technologies, Inc.  All Rights Reserved.
+#Qualcomm Technologies Proprietary and Confidential.
+
+# MCM RIL Service  init.d script to start the RIL Software's mcm_ril_service daemon
+
+set -e
+
+DAEMON=/usr/bin/mcm_ril_service
+
+case "$1" in
+  start)
+        echo -n "Starting MCM RIL Services: "
+        start-stop-daemon -S -b -x $DAEMON
+        echo "done"
+        ;;
+  stop)
+        echo -n "Stopping MCM RIL Services: "
+        start-stop-daemon -K -n $DAEMON
+        echo "done"
+        ;;
+  restart)
+        $0 stop
+        $0 start
+        ;;
+  *)
+        echo "Usage start_mcm_ril_srv_le { start | stop | restart}" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

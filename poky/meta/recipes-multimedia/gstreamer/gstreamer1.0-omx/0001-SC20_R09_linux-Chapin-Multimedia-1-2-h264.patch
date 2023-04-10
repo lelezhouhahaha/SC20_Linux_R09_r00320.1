@@ -1,0 +1,112 @@
+From 49565f478b9cc4eaf47b7fdeb2a7edace25dccd6 Mon Sep 17 00:00:00 2001
+From: Chapin Fang <chapin.fang@quectel.com>
+Date: Tue, 24 Mar 2020 11:16:36 +0800
+Subject: [PATCH] =?UTF-8?q?SC20=5FR09=5Flinux:Chapin:Multimedia:1=E3=80=81?=
+ =?UTF-8?q?=E8=A7=A3=E5=86=B3=E6=92=AD=E6=94=BE=E6=97=B6=E5=80=99=E5=B4=A9?=
+ =?UTF-8?q?=E6=BA=83=EF=BC=8C=E5=AD=98=E5=9C=A8=E7=A9=BA=E6=8C=87=E9=92=88?=
+ =?UTF-8?q?=202=E3=80=81=E8=A7=A3=E5=86=B3h264=E5=88=9A=E6=92=AD=E6=94=BE?=
+ =?UTF-8?q?=E7=9A=84=E6=97=B6=E5=80=99=E9=BB=91=E5=B1=8F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+详述更改原因：1、判断空指针，跳过处理 2、只做一次reconfigure
+修改点分类  ：内部缺陷
+适用哪些项目：该项目
+详述更改内容：
+详述测试方法：软件测试
+软测测试方法：尝试播放H264编码的视频
+硬测测试方法：无
+
+Change-Id: Ia6c72190589229b12c4cf1b67f782da4d8381d24
+---
+ omx/gstomx.c         | 18 ++++++++++--------
+ omx/gstomxvideodec.c |  6 ------
+ 2 files changed, 10 insertions(+), 14 deletions(-)
+
+diff --git a/omx/gstomx.c b/omx/gstomx.c
+index 61274c4f7..13f878f3b 100755
+--- a/omx/gstomx.c
++++ b/omx/gstomx.c
+@@ -358,6 +358,11 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
+         GstOMXBuffer *buf = msg->content.buffer_done.buffer->pAppPrivate;
+         GstOMXPort *port;
+ 
++        if (buf == NULL)
++        {
++           GST_ERROR_OBJECT (comp->parent, "buf is null, don't push to pending buffer");
++           break;
++        }
+         port = buf->port;
+ 
+         if (msg->content.buffer_done.empty) {
+@@ -561,7 +566,8 @@ EventHandler (OMX_HANDLETYPE hComponent, OMX_PTR pAppData, OMX_EVENTTYPE eEvent,
+       GST_DEBUG_OBJECT (comp->parent, "%s settings changed (port index: %u)",
+           comp->name, (guint) msg->content.port_settings_changed.port);
+ 
+-      gst_omx_component_send_message (comp, msg);
++      if (nData2 == 0 || nData2 == OMX_IndexParamPortDefinition)   //底层会上报两次OMX_EventPortSettingsChanged，只在OMX_IndexParamPortDefinition的时候进行reconfigure
++          gst_omx_component_send_message (comp, msg);
+       break;
+     }
+     case OMX_EventBufferFlag:{
+@@ -1336,8 +1342,8 @@ retry:
+           comp->name, port->index);
+       _buf = g_queue_pop_head (&port->pending_buffers);
+ 	  
+-      ret = GST_OMX_ACQUIRE_BUFFER_RECONFIGURE; // add by Les
+-      //ret = GST_OMX_ACQUIRE_BUFFER_OK;
++      //ret = GST_OMX_ACQUIRE_BUFFER_RECONFIGURE; // add by Les, restore by chapin
++      ret = GST_OMX_ACQUIRE_BUFFER_OK;
+       goto done;
+     }
+ 
+@@ -1427,7 +1433,7 @@ gst_omx_port_release_buffer (GstOMXPort * port, GstOMXBuffer * buf)
+ 
+   g_mutex_lock (&comp->lock);
+ 
+-  GST_DEBUG_OBJECT (comp->parent, "Releasing buffer %p (%p) to %s port %u",
++  GST_ERROR_OBJECT (comp->parent, "Releasing buffer %p (%p) to %s port %u",
+       buf, buf->omx_buf->pBuffer, comp->name, port->index);
+ 
+   gst_omx_component_handle_messages (comp);
+@@ -1471,10 +1477,6 @@ gst_omx_port_release_buffer (GstOMXPort * port, GstOMXBuffer * buf)
+ 	  
+     err = OMX_EmptyThisBuffer (comp->handle, buf->omx_buf);
+ 	//fwrite(buf->omx_buf->pBuffer, 1, buf->omx_buf->nFilledLen, inFile);  // add by Les
+-	//fflush(inFile);
+-    //fsync(fileno(inFile));
+-	//fclose(inFile);  // add by Les
+-	//while(1);
+ 
+   } else {
+     err = OMX_FillThisBuffer (comp->handle, buf->omx_buf);   // 传递空的bffer给component用于存储解码后的帧
+diff --git a/omx/gstomxvideodec.c b/omx/gstomxvideodec.c
+index 1927a1a3e..87c469656 100755
+--- a/omx/gstomxvideodec.c
++++ b/omx/gstomxvideodec.c
+@@ -1315,7 +1315,6 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+     GstVideoCodecState *state;
+     OMX_PARAM_PORTDEFINITIONTYPE port_def;
+     GstVideoFormat format;
+-	//acq_return = GST_OMX_ACQUIRE_BUFFER_RECONFIGURE;  // add by Les for debug
+ 
+     GST_DEBUG_OBJECT (self, "Port settings have changed, updating caps");
+ 
+@@ -1344,13 +1343,8 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+     }
+ 
+     if (acq_return == GST_OMX_ACQUIRE_BUFFER_RECONFIGURE) {
+-      /* We have the possibility to reconfigure everything now */
+-	  //GST_ERROR_OBJECT (self,"########## before gst_omx_video_dec_reconfigure_output_port");
+       err = gst_omx_video_dec_reconfigure_output_port (self);
+-	  //GST_ERROR_OBJECT (self,"########## after gst_omx_video_dec_reconfigure_output_port: %s (0x%08x)",
+-		  //gst_omx_error_to_string (err), err);
+ 
+-	  //while(1);
+       if (err != OMX_ErrorNone)
+         goto reconfigure_error;
+     } else {
+-- 
+2.23.0
+

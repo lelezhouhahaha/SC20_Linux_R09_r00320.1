@@ -1,0 +1,31 @@
+#! /bin/sh
+#
+#Copyright (c) 2020 Quectel Wireless Solutions Co., Ltd. All Rights Reserved.
+#Qualcomm Technologies Proprietary and Confidential.
+
+#qlrild init.d script to start the qlrild daemon
+
+set -e
+
+case "$1" in
+	start)
+		echo -n  "Starting qlrild: " > /dev/kmsg
+		start-stop-daemon -S -b --exec qlrild
+		echo "done" > /dev/kmsg
+		;;
+	stop)
+		echo -n "Stopping qlrild: " > /dev/kmsg
+		start-stop-daemon -K -n qlrild
+		echo "done" > /dev/kmsg
+		;;
+	restart)
+		$0 stop
+		$0 start
+		;;
+	*)
+		echo "Usage $0 { start | stop | restart}" >&2
+		exit 1
+		;;
+esac
+
+exit 0

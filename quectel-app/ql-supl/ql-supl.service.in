@@ -1,0 +1,13 @@
+[Unit]
+Description=ql-supl
+After=ql_manager_server.service
+
+[Service]
+Type=simple
+Restart=always
+ExecStart=/usr/bin/ql-supl
+ExecStop=/sbin/start-stop-daemon -K -n /usr/bin/ql-supl
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target.wants

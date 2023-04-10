@@ -1,0 +1,11 @@
+[Unit]
+Description=start_lwm2mclient
+After=mobap-switch.service
+[Service]
+Type=forking
+ExecStart=/etc/initscripts/start_lwm2mclient start
+ExecStop=/etc/initscripts/start_lwm2mclient stop	
+Restart=on-failure
+ExecStartPre=/bin/sleep 10
+[Install]
+WantedBy=multi-user.target

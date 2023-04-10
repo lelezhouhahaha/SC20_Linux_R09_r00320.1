@@ -1,0 +1,13 @@
+[Unit]
+Description=Quec_launcher
+DefaultDependencies=no
+Before=local-fs-pre.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/environment
+ExecStart=/usr/bin/quec_launcher
+Restart=no
+
+[Install]
+WantedBy=multi-user.target.wants

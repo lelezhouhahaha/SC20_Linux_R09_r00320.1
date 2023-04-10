@@ -1,0 +1,1300 @@
+/*
+ *      Copyright:  (C) 2020 quectel
+ *                  All rights reserved.
+ *       Filename:  main.c
+ *    Description:  sound-Manager
+ *        Version:  1.0.0(20200930)
+ *         Author:  Peeta/fulinux <peeta.chen@quectel.com>
+ *      ChangeLog:  1, Release initial version on 20200930
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <limits.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <pthread.h>
+
+#include <ql_misc.h>
+#include <RilPublic.h>
+#include <ql-mcm-api/ql_in.h>
+#include <fileparser/iniparser.h>
+
+#include "linked_list.h"
+#include "msm_audio.h"
+
+#define SOUNDLIB_PATH           "/etc/misc/soundlib/"
+#define PROC_SOUND_CARD_PATH    "/proc/asound/cards"
+#define SOUNDMGR_CONFIG         "/etc/sound_manager.ini"
+
+static int sndHandle = 0;
+static int voiceHandle = 0;
+static int stop_sound_play = 1;
+static int sound_play_state = 0;  //0 停止 1 播放 2 播放线程结束
+static int have_calls = 0;
+static int calls_end = 0;
+static int call_active = 0;
+static int calls_sum = 0;
+static int calls_sum_old = 0;
+static int holding2active = 0; //holding to active state
+static char voice_output[20] = {0};
+static char voice_input[20] = {0};
+static char audio_output[20] = {0};
+static char music_output[20] = {0};
+static int speaker_volume = 85;//0-124
+static int handset_volume = 6;//0-8
+static int thread_loop = 1;
+static int mcm_handle = 0;
+static int qlril_handle = 0;
+static int mute_state = 0;
+static int mute_state_old = 1;
+
+static pthread_mutex_t s_stateMutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct calls_state {
+	int id;
+	int index;
+	int state;
+	char number[100];
+};
+
+struct sound_strategy {
+	int strategy;
+	char wavfile[100];
+};
+
+list_node_t *state_list = NULL;
+
+static void *play_music_thread(void *args)
+{
+	int ret = 0;
+	int i = 0;
+	int j = 0;
+	int strategy = 0;
+	int times = 0;
+	char wavfile[100] = {0};
+	struct sound_strategy *p = (struct sound_strategy *)args;
+
+	strategy = p->strategy;
+	snprintf(wavfile, sizeof(wavfile), "%s", p->wavfile);
+
+	if (strlen(wavfile) <= 0) {
+		QLOGD("wavfile is invalid");
+		return NULL;
+	}
+
+	if (access(wavfile, F_OK)) {
+		QLOGD("wavfile is no exit");
+		return NULL;
+	}
+
+	if (sndHandle == 0)
+		return NULL;
+
+	memset(music_output, 0, sizeof(music_output));
+	if (strategy == 1)
+		snprintf(music_output, sizeof(music_output), "%s", voice_output);
+	else
+		snprintf(music_output, sizeof(music_output), "%s", audio_output);
+
+	if (strlen(music_output) > 0) {
+		audio_stream_enable(&sndHandle, music_output);
+	} else
+		return NULL;
+
+	if (strcmp(music_output, "Speaker") == 0 ||
+			strcmp(voice_output, "Speaker") == 0) {
+		//this will cause:param_set_sw_params: Error setting SW params:-1
+		//ret = audio_set_volume("RX3 Digital Volume", speaker_volume);
+		//QLOGD("audio_set_volume return:%d", ret);
+	}
+
+	stop_sound_play = 0; //播放
+
+	QLOGD("Enter wavfile[%s]", wavfile);
+	sound_play_state = 1;
+	for (i = 0; i < 30 && stop_sound_play == 0; i++) {
+		//QLOGD("audio_play_wav times = %d", i);
+		ret = audio_play_wav(&sndHandle, wavfile);
+		if (ret != 0) {
+			QLOGD("audio_play_wav() error[%d]:%d", ret, errno);
+		}
+
+		if (stop_sound_play != 0) {
+			ret = -100;
+			break;
+		}
+
+		if (ret < -8) {
+			QLOGD("audio_play_wav failed return:%d\n", ret);
+			break;
+		}
+
+		if (strategy == 3) {
+			break;
+		}
+
+		switch (strategy) {
+		case 1:
+			if ((++times % 2) == 1) {
+				for (j = 0; stop_sound_play == 0 && j < 7; j++) {
+					usleep(50000);
+				}
+			} else {
+				for (j = 0; stop_sound_play == 0 && j < 40; j++) {
+					usleep(50000);
+				}
+			}
+
+			break;
+		case 2:
+			for (j = 0; stop_sound_play == 0 && j < 80; j++) {
+				usleep(50000);
+			}
+
+			break;
+		default:
+			for (j = 0; stop_sound_play == 0 && j < 40; j++) {
+				usleep(50000);
+			}
+
+			break;
+		}
+	}
+
+	QLOGD("Exit[%d]", ret);
+	stop_sound_play = 2;
+	sound_play_state = 2; //播放线程结束，但是播放器还没有关闭
+
+	return NULL;
+}
+
+static int play_music_start(void *args)
+{
+	int ret = 0;
+	pthread_t play_music_tid = 0;
+
+	ret = pthread_create(&play_music_tid, NULL,
+			play_music_thread, (void *)args);
+	if (ret != 0) {
+		QLOGE("Error: pthread_create");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int play_music_stop(void *args)
+{
+	int i = 0;
+	int ret = 0;
+	struct sound_strategy *p = (struct sound_strategy *)args;
+
+	QLOGD("Enter");
+	if (sndHandle == 0)
+		return -1;
+
+	stop_sound_play = 1;
+
+	if (sound_play_state == 0 || sound_play_state == 2) {
+		QLOGD("no play music");
+		goto exit1;
+	}
+
+	ret = audio_play_stop(&sndHandle);
+	if (ret < 0) {
+		QLOGD("audio_play_stop return:%d", ret);
+	}
+
+	if (sound_play_state == 1) {
+		for (i = 0; i < 10 && sound_play_state != 2; i++) {
+			stop_sound_play = 1;
+			usleep (1000);
+		}
+	}
+
+exit1:
+
+	if (call_active == 0 && calls_sum < 1) {
+		if (strlen(music_output) > 0) {
+			audio_stream_disable(&sndHandle, music_output);
+		}
+	}
+
+	sound_play_state = 0;
+
+	QLOGD("Exit");
+
+	return 0;
+}
+
+static void *sound_status_switch_for_qlril(void *args)
+{
+	int i = 0;
+	int ret = 0;
+	int new_index = -1;
+	int old_index = -1;
+	int new_state = -1;
+	int old_state = -1;
+	char new_number[100] = {0};
+	char old_number[100] = {0};
+
+	struct calls_state *cstate = NULL;
+	struct sound_strategy ss;
+	list_node_t *node = NULL;
+
+	char *strCallState[7] = {"ACTIVE", "HOLDING", "DIALING",
+		"ALERTING", "INCOMING", "WAITING", "END"};
+
+	QLOGD("thread stated");
+	for (;thread_loop;) {
+		pthread_mutex_lock(&s_stateMutex);
+		for (node = state_list; node != NULL; node = node->next) {
+			cstate = (struct calls_state *)node->data;
+			if (cstate == NULL)
+				continue;
+
+			new_index = cstate->index;
+			new_state = cstate->state;
+			memset(new_number, 0, sizeof(new_number));
+			if (strlen(cstate->number) > 0) {
+				snprintf(new_number, sizeof(new_number), "%s", cstate->number);
+				QLOGD("Receivce new state:%d, numer:%s", new_state, new_number);
+			}
+
+			QLOGD("new_index[%d] new_state[%d]", new_index, new_state);
+			list_remove(&state_list, node);
+			free(cstate);
+			cstate = NULL;
+			break;
+		}
+		pthread_mutex_unlock(&s_stateMutex);
+
+		if (calls_sum_old != calls_sum) {
+			calls_sum_old = calls_sum;
+			if (call_active == 1) {
+				ss.strategy = 1;
+				play_music_stop((void *)&ss);
+			}
+		}
+
+		if (call_active == 1) {
+			ret = QLRIL_GetMute(&qlril_handle, &mute_state);
+			if (mute_state != mute_state_old) {
+				mute_state_old = mute_state;
+				//set voice call mute on or off
+				ret = audio_set_volume("PRI_MI2S_RX_Voice Mixer VoiceMMode1", mute_state);
+				QLOGD("set PRI_MI2S_RX_Voice Mixer VoiceMMode1 %d return:%d", mute_state, ret);
+			}
+			usleep(1000);
+		}
+
+		if (old_state != new_state) {
+			QLOGD("new_state[%d], old_state[%d]", new_state, old_state);
+			QLOGD("calls_sum_old[%d], calls_sum[%d]", calls_sum_old, calls_sum);
+			old_state = new_state;
+		} else {
+			if (state_list == NULL) {
+				if (old_state == 4)//INCOMING
+					sleep(1);
+				else
+					sleep(2);
+			} else
+				usleep(100);
+			continue;
+		}
+
+		QLOGD("new_index[%d], old_index[%d]", new_index, old_index);
+		QLOGD("new_number[%s], old_number[%s]", new_number, old_number);
+		QLOGD("holding2active[%d], call_active[%d]", holding2active, call_active);
+
+		QLOGD("Call state[%s] Enter", strCallState[new_state]);
+		switch(new_state) {
+		case 4: //INCOMING
+			if (calls_sum > 1) { //busy tone, 450Hz, -10dBm0, play:350ms, stop:350ms, alternately
+				ss.strategy = 1;
+				snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+						"busy_tone.wav");
+			} else {//telephony ring
+				ss.strategy = 0;
+				snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+						"telephone_ring.wav");
+			}
+
+			play_music_stop((void *)&ss);
+			play_music_start((void *)&ss);
+
+			break;
+		case 2: //DIALING
+			ss.strategy = 2;
+			snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+					"ring_back_tone.wav");
+			play_music_start((void *)&ss);
+			break;
+		case 3: //ALERTING
+			play_music_stop((void *)&ss);
+			ss.strategy = 2;
+			snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+					"ring_back_tone.wav");
+			play_music_start((void *)&ss);
+			break;
+		case 0: //ACTIVE
+			if (calls_sum < 2) {
+				play_music_stop(NULL);
+			}
+
+			if (call_active == 1) {
+				old_index = new_index;
+				snprintf(old_number, sizeof(old_number), "%s", new_number);
+				break;
+			}
+
+			/*
+			   if (call_active == 1 && calls_sum > 1) {
+			   snprintf(old_number, sizeof(old_number), "%s", new_number);
+			   break;
+			   }
+
+			   if (call_active == 1 && strcmp(old_number, new_number) == 0) {
+			   break;
+			   }
+
+			   snprintf(old_number, sizeof(old_number), "%s", new_number);
+			   */
+
+			for (i = 0; i < 2; i++) {
+				ret = voice_stream_enable(&voiceHandle, voice_output, voice_input);
+				if (ret < 0) {
+					QLOGD("voice_stream_enable failed:%d", ret);
+					ret = voice_stream_disable(&voiceHandle, voice_output, voice_input);
+					if (ret < 0)
+						QLOGD("voice_stream_disable failed:%d", ret);
+					call_active = 0;
+					usleep(500000);
+				} else {
+					call_active = 1;
+					old_index = new_index;
+					if (voice_input != NULL && strcmp(voice_input, "Handset") == 0) {
+						ret = audio_set_volume("ADC1 Volume", handset_volume);
+						QLOGD("audio_set_volume ADC1 Volume return:%d", ret);
+					}
+					break;
+				}
+			}
+
+			break;
+		case 1: //HOLDING
+			play_music_stop(NULL);
+			if (holding2active != 0 && qlril_handle != 0) {
+				ret = QLRIL_SwitchWaitingOrHoldingAndActive(&qlril_handle);
+				QLOGD("QLRIL_SwitchWaitingOrHoldingAndActive return:%d", ret);
+				holding2active = 0;
+			}
+			break;
+		case 6: //END
+			if (call_active == 1) {
+				ss.strategy = 1;
+				play_music_stop((void *)&ss);
+			} else
+				play_music_stop(NULL);
+
+			if (call_active == 1 && calls_sum <= 1) {
+				call_active = 0;
+				ret = voice_stream_disable(&voiceHandle, voice_output, voice_input);
+				if (ret < 0)
+					QLOGE("voice_stream_disable failed:%d", ret);
+
+				play_music_stop(NULL);
+				new_index = old_index = -1;
+				memset(old_number, 0, sizeof(old_number));
+				ss.strategy = 3;
+				snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH, "busy_tone.wav");
+				play_music_start((void *)&ss);
+				state_list = NULL;
+				calls_sum_old = 0;
+				calls_sum = 0;
+			}
+
+			mute_state_old = 1;
+			ret = QLRIL_SetMute(&qlril_handle, mute_state_old);
+			ret = audio_set_volume("PRI_MI2S_RX_Voice Mixer VoiceMMode1", mute_state_old);
+
+			break;
+		case 5: //WAITING
+			if (call_active == 1) { //busy tone, 450Hz, -10dBm0, play:350ms, stop:350ms, alternately
+				ss.strategy = 1;
+				snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+						"busy_tone.wav");
+				play_music_stop((void *)&ss);
+				play_music_start((void *)&ss);
+			}
+			break;
+		default:
+			break;
+		}
+		QLOGD("Call state[%s] Exit", strCallState[new_state]);
+
+		usleep(100000);
+	}
+
+	/*if (sndHandle != 0) {
+	  snd_card_exit(&sndHandle);
+	  }
+
+	  if (voiceHandle != 0) {
+	  snd_card_exit(&voiceHandle);
+	  }*/
+
+	QLOGD("thread stoped");
+}
+
+static void *sound_status_switch(void *args)
+{
+	int i = 0;
+	int ret = 0;
+	int new_callid = -1;
+	int old_callid = -1;
+	int new_state = -1;
+	int old_state = -1;
+	int old_callsum = 0;
+	struct calls_state *cstate = NULL;
+	struct calls_state *pstate = NULL;
+	struct sound_strategy ss;
+	list_node_t *node = NULL;
+
+	char new_number[100] = {0};
+	char old_number[100] = {0};
+	char *strCallState[7] = {"INCOMING", "DIALING", "ALERTING", "ACTIVE", "HOLDING", "END", "WAITING"};
+
+	QLOGD("thread stated");
+	for (;thread_loop;) {
+		pthread_mutex_lock(&s_stateMutex);
+		for (node = state_list; node != NULL; node = node->next) {
+			cstate = (struct calls_state *)node->data;
+			if (cstate == NULL)
+				continue;
+
+			new_callid = cstate->id;
+			new_state = cstate->state;
+			memset(new_number, 0, sizeof(new_number));
+			if (strlen(cstate->number) > 0) {
+				snprintf(new_number, sizeof(new_number), "%s", cstate->number);
+				QLOGD("Receivce new_state[%d] number[%s]", new_state, new_number);
+			}
+			list_remove(&state_list, node);
+			free(cstate);
+			cstate = NULL;
+			break;
+		}
+		pthread_mutex_unlock(&s_stateMutex);
+
+		if (old_callsum != calls_sum || old_state != new_state) {
+			QLOGD("new_state[%d] old_state[%d]", new_state, old_state);
+			QLOGD("old_callsum[%d] calls_sum[%d]", old_callsum, calls_sum);
+			old_state = new_state;
+			old_callsum = calls_sum;
+		} else {
+			if (state_list == NULL) {
+				sleep(2);
+			} else
+				usleep(100000);
+			continue;
+		}
+
+		QLOGD("new_callid[%d] old_callid[%d]", new_callid, old_callid);
+		QLOGD("new_number[%s] old_number[%s]", new_number, old_number);
+		QLOGD("calls_end[%d] call_active[%d]", calls_end, call_active);
+
+		QLOGD("Call state[%s] Enter", strCallState[old_state]);
+		switch(old_state) {
+		case 0: //INCOMING
+			if (calls_sum > 1) { //busy tone, 450Hz, -10dBm0, play:350ms, stop:350ms, alternately
+				ss.strategy = 1;
+				snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+						"busy_tone.wav");
+			} else {//telephony ring
+				ss.strategy = 0;
+				snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+						"telephone_ring.wav");
+			}
+
+			play_music_stop((void *)&ss);
+			play_music_start((void *)&ss);
+
+			old_callid = new_callid;
+
+			break;
+		case 1: //DIALING
+			ss.strategy = 2;
+			snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+					"ring_back_tone.wav");
+			play_music_start((void *)&ss);
+			break;
+		case 2: //ALERTING
+			play_music_stop((void *)&ss);
+			ss.strategy = 2;
+			snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH,
+					"ring_back_tone.wav");
+			play_music_start((void *)&ss);
+			break;
+		case 3: //ACTIVE
+			if (calls_sum < 2 || old_callid == new_callid) {
+				play_music_stop(NULL);
+			}
+
+			if (call_active == 1) {
+				snprintf(old_number, sizeof(old_number), "%s", new_number);
+				old_callid = new_callid;
+				break;
+			}
+
+			/*
+			   if (call_active == 1 && calls_sum > 1) {
+			   snprintf(old_number, sizeof(old_number), "%s", new_number);
+			   break;
+			   }
+
+			   if (call_active == 1 && strcmp(old_number, new_number) == 0) {
+			   break;
+			   }
+
+			   snprintf(old_number, sizeof(old_number), "%s", new_number);
+			   */
+
+			for (i = 0; i < 2; i++) {
+				ret = voice_stream_enable(&voiceHandle, voice_output, voice_input);
+				if (ret < 0) {
+					QLOGD("voice_stream_enable failed:%d", ret);
+					ret = voice_stream_disable(&voiceHandle, voice_output, voice_input);
+					if (ret < 0)
+						QLOGD("voice_stream_disable failed:%d", ret);
+					usleep(500000);
+				} else {
+					call_active = 1;
+					old_callid = new_callid;
+					snprintf(old_number, sizeof(old_number), "%s", new_number);
+					if (voice_input != NULL && strcmp(voice_input, "Handset") == 0) {
+						ret = audio_set_volume("ADC1 Volume", handset_volume);
+						QLOGD("audio_set_volume ADC1 Volume return:%d", ret);
+					}
+					break;
+				}
+				usleep(100000);
+			}
+
+			break;
+		case 4: //HOLDING
+			play_music_stop(NULL);
+			break;
+		case 5: //END
+			if (call_active == 1) {
+				ss.strategy = 1;
+				play_music_stop((void *)&ss);
+			} else
+				play_music_stop(NULL);
+
+			if (call_active == 1 && calls_end >= calls_sum) {
+				call_active = 0;
+				ret = voice_stream_disable(&voiceHandle, voice_output, voice_input);
+				if (ret < 0)
+					QLOGD("voice_stream_disable failed:%d", ret);
+
+				calls_end = 0;
+				new_callid = old_callid = -1;
+				play_music_stop(NULL);
+				memset(old_number, 0, sizeof(old_number));
+				ss.strategy = 3;
+				snprintf(ss.wavfile, sizeof(ss.wavfile), "%s%s", SOUNDLIB_PATH, "busy_tone.wav");
+				play_music_start((void *)&ss);
+				state_list = NULL;
+				calls_sum_old = calls_sum;
+				calls_sum = 0;
+			}
+			break;
+		case 6: //WAITING
+			break;
+		default:
+			break;
+		}
+		QLOGD("Call state[%s] Exit\n", strCallState[old_state]);
+
+		usleep(100000);
+	}
+
+	/*if (sndHandle != 0) {
+	  snd_card_exit(&sndHandle);
+	  }
+
+	  if (voiceHandle != 0) {
+	  snd_card_exit(&voiceHandle);
+	  }*/
+
+	QLOGD("thread stoped");
+}
+
+void processUnsolInd_cb(int *handle, int slotId, int event, void *data, size_t size)
+{
+	int i = 0;
+	int id = 0;
+	int ret = 0;
+	int same_flag = 0;
+	int holding_state = 0;
+	list_node_t *node = NULL;
+	struct calls_state *cstate = NULL;
+	char dev[] = "/dev/smd8";
+	void *resp = NULL;
+
+	RIL_Call *calls = NULL;
+	ims_CallList *call_list = NULL;
+	ims_CallList_Call **imsCalls = NULL;
+
+	switch(event) {
+	case RIL_UNSOL_RESPONSE_CALL_STATE_CHANGED: //1001
+		QLOGD("RIL_UNSOL_RESPONSE_CALL_STATE_CHANGED message size: %d", size);
+		ret = QLRIL_GetCurrentCalls(handle, slotId, (void **)&calls);
+		QLOGD("QLRIL_GetCurrentCalls items = %d", ret);
+
+		if (ret >= 0) {
+			if (calls == NULL) {
+				QLOGD("RIL_Call memory pointer is NULL");
+			}
+
+			if (ret >= 20) {
+				QLOGD("Warning!!! Calls items is too many");
+			}
+
+			pthread_mutex_lock(&s_stateMutex);
+			calls_sum_old = calls_sum;
+			calls_sum = ret;
+			have_calls = 0;
+			holding_state = 0;
+			holding2active = 0;
+			if (calls_sum == 0 || calls == NULL) {
+				for (node = state_list; node != NULL; node = node->next) {
+					cstate = (struct calls_state *)node->data;
+					if (cstate == NULL)
+						continue;
+
+					free(cstate);
+					node->data = NULL;
+				}
+
+				list_destroy(&state_list);
+				state_list = NULL;
+
+				cstate = (struct calls_state *)malloc(sizeof(struct calls_state));
+				cstate->index = 0;
+				cstate->state = 6;
+				memset(cstate->number, 0, sizeof(cstate->number));
+				state_list = list_create((void *)cstate);
+			} else {
+				for (i = 0; i < calls_sum && (calls != NULL); i++) {
+					if (calls[i].isVoice == 0)
+						continue;
+
+					if (calls[i].state == 0)
+						have_calls++;
+
+					if (calls[i].state == 1)//holding
+						holding_state++;
+				}
+
+				if (have_calls == 0 && holding_state != 0) {
+					holding2active = 1;
+				}
+
+				if (calls_sum_old > calls_sum) {
+					for (node = state_list; node != NULL; node = node->next) {
+						cstate = (struct calls_state *)node->data;
+						if (cstate == NULL)
+							continue;
+						free(cstate);
+						node->data = NULL;
+					}
+					list_destroy(&state_list);
+					state_list = NULL;
+				}
+
+				for (i = 0; i < calls_sum && (calls != NULL); i++) {
+					if (calls[i].isVoice == 0)
+						continue;
+
+					if (calls[i].state == 0)
+						have_calls = 1;
+
+					same_flag = 0;
+					for (node = state_list; node != NULL; node = node->next) {
+						cstate = (struct calls_state *)node->data;
+						if (cstate == NULL)
+							continue;
+
+						if ((calls[i].number != NULL) && (strncmp(cstate->number,
+										calls[i].number, strlen(calls[i].number)) == 0)) {
+							if ((cstate->index >= calls[i].index) && (cstate->state != calls[i].state)) {
+								cstate->index = calls[i].index;
+								cstate->state = calls[i].state;
+								same_flag = 1;
+								QLOGD("There is new call index[%d] state[%d]", cstate->index, cstate->state);
+								continue;
+							}
+						}
+
+						if (calls_sum == 1 && cstate->state == 6 && calls[i].state == 4) {
+							same_flag = 1;
+							cstate->index = calls[i].index;
+							cstate->state = calls[i].state;
+
+							if (calls[i].number != NULL) {
+								snprintf(cstate->number, sizeof(cstate->number), "%s", calls[i].number);
+								free(calls[i].number);
+								calls[i].number = NULL;
+							}
+
+							if (calls[i].name) {
+								free(calls[i].name);
+								calls[i].name = NULL;
+							}
+						}
+
+						if (cstate->index == calls[i].index &&
+								cstate->state == calls[i].state) {
+							if ((calls[i].number != NULL) && (strncmp(cstate->number,
+											calls[i].number, strlen(calls[i].number)) == 0)) {
+								same_flag = 1;
+								break;
+							}
+						}
+					}
+
+					if (same_flag != 1) {
+						same_flag = 0;
+						cstate = (struct calls_state *)malloc(sizeof(struct calls_state));
+						cstate->index = calls[i].index;
+						cstate->state = calls[i].state;
+						if (calls[i].number != NULL) {
+							snprintf(cstate->number, sizeof(cstate->number), "%s", calls[i].number);
+							free(calls[i].number);
+							calls[i].number = NULL;
+						}
+						QLOGD("There is new call index[%d] state[%d]",
+								cstate->index, cstate->state);
+
+						if (calls[i].name) {
+							free(calls[i].name);
+							calls[i].name = NULL;
+						}
+
+						state_list = list_insert_beginning(state_list, (void *)cstate);
+						if (!state_list)
+							QLOGD("Error list_insert_beginning");
+					}
+				}
+			}
+			pthread_mutex_unlock(&s_stateMutex);
+
+			if (calls) {
+				free(calls);
+				calls = NULL;
+			}
+		} else {
+			QLOGD("QLRIL_GetCurrentCalls failed with return: %d", ret);
+		}
+
+		break;
+	case IMS_UNSOL_RESPONSE_CALL_STATE_CHANGED: //1051
+		//201 = ims_MsgId_UNSOL_RESPONSE_CALL_STATE_CHANGED
+		QLOGD("IMS_UNSOL_RESPONSE_CALL_STATE_CHANGED message size: %d", size);
+		ret = size;
+		if (ret <= 0) {
+			ret = QLRIL_IMSGetCurrentCalls(handle, slotId, &id, &resp);
+		} else {
+			ret = size;
+			resp = data;
+		}
+
+		if (ret <= 0 || resp == NULL) {
+			QLOGD("some/All of IMS call end");
+		} else {
+			call_list = (ims_CallList *)resp;
+			imsCalls = (ims_CallList_Call **)call_list->callAttributes.arg;
+		}
+
+		pthread_mutex_lock(&s_stateMutex);
+		calls_sum = 0;
+		have_calls = 0;
+		holding_state = 0;
+		holding2active = 0;
+		if (ret == 0 || resp == NULL || imsCalls == NULL) {
+			for (node = state_list; node != NULL; node = node->next) {
+				cstate = (struct calls_state *)node->data;
+				if (cstate == NULL)
+					continue;
+				free(cstate);
+				node->data = NULL;
+			}
+
+			list_destroy(&state_list);
+			state_list = NULL;
+
+			cstate = (struct calls_state *)malloc(sizeof(struct calls_state));
+			cstate->index = 0;
+			cstate->state = 6;
+			memset(cstate->number, 0, sizeof(cstate->number));
+			state_list = list_create((void *)cstate);
+		} else {
+			for (i = 0; imsCalls[i] != NULL; i++) {
+				if (imsCalls[i]->has_isVoice && !imsCalls[i]->isVoice)
+					continue;
+
+				calls_sum++;
+
+				if (imsCalls[i]->has_state) {
+					if (imsCalls[i]->state == 0)
+						have_calls++;
+					if (imsCalls[i]->state == 1)//holding
+						holding_state++;
+				}
+
+				same_flag = 0;
+				for (node = state_list; node != NULL; node = node->next) {
+					cstate = (struct calls_state *)node->data;
+					if (cstate == NULL)
+						continue;
+
+					if ((imsCalls[i]->number.arg != NULL) && (strncmp(cstate->number,
+									imsCalls[i]->number.arg, strlen(imsCalls[i]->number.arg)) == 0)) {
+						if ((cstate->index >= imsCalls[i]->index) && (cstate->state != imsCalls[i]->state)) {
+							cstate->index = imsCalls[i]->index;
+							cstate->state = imsCalls[i]->state;
+							same_flag = 1;
+							QLOGD("There is new call index[%d] state[%d]", cstate->index, cstate->state);
+							continue;
+						}
+					}
+
+					if (cstate->index == imsCalls[i]->index &&
+							cstate->state == imsCalls[i]->state) {
+						if ((imsCalls[i]->number.arg != NULL) && (strncmp(cstate->number,
+										imsCalls[i]->number.arg, strlen(imsCalls[i]->number.arg)) == 0)) {
+							same_flag = 1;
+							break;
+						}
+					}
+				}
+
+				if (same_flag != 1) {
+					same_flag = 0;
+					QLOGD("There is new call state");
+					cstate = (struct calls_state *)malloc(sizeof(struct calls_state));
+					cstate->index = imsCalls[i]->index;
+					cstate->state = imsCalls[i]->state;
+					if (imsCalls[i]->number.arg != NULL) {
+						snprintf(cstate->number, sizeof(cstate->number), "%s",
+								(char *)imsCalls[i]->number.arg);
+					}
+					QLOGD("There is new call index[%d] state[%d]",
+							cstate->index, cstate->state);
+
+					if (state_list != NULL) {
+						state_list = list_insert_beginning(state_list, (void *)cstate);
+						if (!state_list)
+							QLOGD("Error list_insert_beginning");
+					} else {
+						state_list = list_create((void *)cstate);
+					}
+				}
+			}
+
+			if (have_calls == 0 && holding_state != 0)
+				holding2active = 1;
+		}
+		pthread_mutex_unlock(&s_stateMutex);
+		break;
+	default:
+		if (event == 1050)
+			qlril_handle = 0;
+		QLOGD("Unknown event:%d", event);
+		break;
+	}
+}
+
+void voice_call_ind_func(unsigned int id, void *data, uint32_t len)
+{
+	int i = 0;
+	int same_flag = 0;
+	list_node_t *node = NULL;
+	struct calls_state *cstate = NULL;
+
+	if (NULL == data)
+		return;
+
+	switch(id) {
+	case E_QL_MCM_VOICE_CALL_IND:
+		if (len < sizeof(ql_mcm_voice_call_ind))
+			break;
+
+		ql_mcm_voice_call_ind *p = (ql_mcm_voice_call_ind *)data;
+		pthread_mutex_lock(&s_stateMutex);
+
+		calls_end = 0;
+		for (i = 0; i < p->calls_len; i++) {
+			if (p->calls[i].state == 5)
+				calls_end++;
+		}
+
+		have_calls = 0;
+		calls_sum_old = calls_sum;
+		calls_sum = p->calls_len;
+		for (i = 0; i < p->calls_len; i++) {
+			QLOGD("call_id[%d] call_state[%d]", p->calls[i].call_id, p->calls[i].state);
+			if (p->calls[i].state == 3)//FIXME
+				have_calls = 1;
+
+			same_flag = 0;
+			for (node = state_list; node != NULL; node = node->next) {
+				cstate = (struct calls_state *)node->data;
+				if ((p->calls[i].number != NULL) && (strncmp(cstate->number,
+								p->calls[i].number, strlen(p->calls[i].number)) == 0)) {
+					if ((cstate->id >= p->calls[i].call_id) && (cstate->state != p->calls[i].state)) {
+						cstate->id = p->calls[i].call_id;
+						cstate->state = p->calls[i].state;
+						same_flag = 1;
+						QLOGD("There is new call index[%d] state[%d]", cstate->index, cstate->state);
+						continue;
+					}
+				}
+
+				if (cstate->id == p->calls[i].call_id &&
+						cstate->state == p->calls[i].state) {
+					same_flag = 1;
+					break;
+				}
+			}
+
+			if (same_flag != 1) {
+				same_flag = 0;
+				QLOGD("There is new call state");
+				cstate = (struct calls_state *)malloc(sizeof(struct calls_state));
+				cstate->id =  p->calls[i].call_id;
+				cstate->state = p->calls[i].state;
+				if (p->calls[i].number != NULL)
+					snprintf(cstate->number, sizeof(cstate->number), "%s", p->calls[i].number);
+
+				if (state_list != NULL) {
+					if (!list_insert_end(state_list, (void *)cstate))
+						QLOGD("Error list_insert_end");
+				} else {
+					state_list = list_create((void *)cstate);
+				}
+			}
+		}
+		pthread_mutex_unlock(&s_stateMutex);
+		break;
+	default:
+		QLOGD("id = %d", id);
+		break;
+	}
+}
+
+static int check_sound_card_ready(void)
+{
+	int ret = 0;
+	FILE *fp = NULL;
+	char *ptr = NULL;
+	char buf[200] = {0};
+
+	fp = fopen(PROC_SOUND_CARD_PATH, "r");
+	if (fp == NULL) {
+		perror("fopen proc sound card");
+		return -1;
+	}
+
+	ret = fread(buf, sizeof(buf), 1, fp);
+	if (ret < 0) {
+		perror("fread proc sound card");
+		fclose(fp);
+		return -2;
+	}
+
+	ptr = strstr(buf, "[msm89");
+	if (ptr == NULL) {
+		QLOGE("sound card not ready");
+		fclose(fp);
+		return -3;
+	}
+
+	fclose(fp);
+	return 0;
+}
+
+static int soundmgr_config_sync(void)
+{
+	int ret = 0;
+	char *str = NULL;
+	char buf[20] = {0};
+	dictionary *ini = NULL;
+	static struct stat state_new, state_old;
+
+	if (access(SOUNDMGR_CONFIG, F_OK) != 0) {
+		if (voice_output != NULL && strlen(voice_output) == 0) {
+			snprintf(voice_output, sizeof(voice_output), "%s", "Speaker");
+		}
+
+		if (voice_input != NULL && strlen(voice_input) == 0) {
+			snprintf(voice_input, sizeof(voice_input), "%s", "Handset");
+		}
+
+		if (audio_output != NULL && strlen(audio_output) == 0) {
+			snprintf(audio_output, sizeof(audio_output), "%s", "Speaker");
+		}
+
+		if (speaker_volume < 0 || speaker_volume > 124)
+			speaker_volume = 85;
+
+		goto exit;
+	}
+
+	ret = stat(SOUNDMGR_CONFIG, &state_new);
+	if (ret != 0 || state_new.st_mtime == state_old.st_mtime) {
+		return 0;
+	}
+
+	state_old.st_mtime = state_new.st_mtime;
+
+	ini = iniparser_load(SOUNDMGR_CONFIG);
+	if (ini != NULL) {
+		memset(buf, 0, sizeof(buf));
+		snprintf(buf, sizeof(buf), "%s", "CallVoice:output");
+		str = iniparser_getstring(ini, buf, NULL);
+		if (str != NULL) {
+			memset(voice_output, 0, sizeof(voice_output));
+			snprintf(voice_output, sizeof(voice_output), "%s", str);
+
+		} else if (voice_output != NULL && strlen(voice_output) == 0) {
+			snprintf(voice_output, sizeof(voice_output), "%s", "Speaker");
+		}
+
+		memset(buf, 0, sizeof(buf));
+		snprintf(buf, sizeof(buf), "%s", "CallVoice:input");
+		str = iniparser_getstring(ini, buf, NULL);
+		if (str != NULL) {
+			memset(voice_input, 0, sizeof(voice_input));
+			snprintf(voice_input, sizeof(voice_input), "%s", str);
+		} else if (voice_input != NULL && strlen(voice_input) == 0) {
+			snprintf(voice_input, sizeof(voice_input), "%s", "Handset");
+		}
+
+		memset(buf, 0, sizeof(buf));
+		snprintf(buf, sizeof(buf), "%s", "AudioSound:output");
+		str = iniparser_getstring(ini, buf, NULL);
+		if (str != NULL) {
+			memset(audio_output, 0, sizeof(audio_output));
+			snprintf(audio_output, sizeof(audio_output), "%s", str);
+		} else if (audio_output != NULL && strlen(audio_output) == 0) {
+			snprintf(audio_output, sizeof(audio_output), "%s", "Speaker");
+		}
+
+		memset(buf, 0, sizeof(buf));
+		snprintf(buf, sizeof(buf), "%s", "SpeakerVolume:value");
+		speaker_volume = iniparser_getint(ini, buf, 85);
+		if (speaker_volume < 0 || speaker_volume > 124)
+			speaker_volume = 85;
+
+		memset(buf, 0, sizeof(buf));
+		snprintf(buf, sizeof(buf), "%s", "HandsetVolume:value");
+		handset_volume = iniparser_getint(ini, buf, 6);
+		if (handset_volume < 0 || handset_volume > 8)
+			handset_volume = 6;
+
+		iniparser_freedict(ini);//free ini
+		ini = NULL;
+	}
+
+exit:
+	if (voice_output != NULL && strcmp(voice_output, "Speaker") == 0) {
+		ret = audio_set_volume("RX3 Digital Volume", speaker_volume);
+		QLOGD("audio_set_volume return:%d", ret);
+	}
+
+	if (voice_input != NULL && strcmp(voice_input, "Handset") == 0) {
+		ret = audio_set_volume("ADC1 Volume", handset_volume);
+		QLOGD("audio_set_volume ADC1 Volume return:%d", ret);
+	}
+
+	QLOGD("Sound Manager voice input:%s", voice_input);
+	QLOGD("Sound Manager voice output:%s", voice_output);
+	QLOGD("Sound Manager audio output:%s", audio_output);
+	QLOGD("Sound Manager speaker_volume:%d", speaker_volume);
+	QLOGD("Sound Manager handset_volume:%d", handset_volume);
+
+	return 0;
+}
+
+int main (int argc, char **argv)
+{
+	int i = 0;
+	int ret = 0;
+	pthread_t tid = 0;
+
+	QLOGD("Sound Manager starting...");
+	soundmgr_config_sync();
+	for (;;) {
+		if (voiceHandle == 0 &&
+				sndHandle == 0 &&
+				check_sound_card_ready() < 0) {
+			sleep(2);
+			continue;
+		}
+
+		ret = 0;
+		if (qlril_handle == 0)
+			ret = QLMISC_IsRunning("mcm_ril_service");
+		if (ret > 0) {
+			if (mcm_handle == 0) {
+				ret = QL_Voice_Call_Client_Init(&mcm_handle);
+				if (ret != 0 || mcm_handle == 0) {
+					QLOGE("Voice Call Initial failed");
+					mcm_handle = 0;
+					sleep(1);
+				}
+			}
+		} else {
+			if (mcm_handle != 0 && tid != 0) {
+				thread_loop = 0;
+				sleep(1);
+				if (tid != 0) {
+					pthread_join(tid, NULL);
+					tid = 0;
+				}
+			}
+
+			mcm_handle = 0;
+			ret = QLMISC_IsRunning("qlrild");
+			if (ret > 0) {
+				if (qlril_handle == 0) {
+					ret = QLRIL_Init(&qlril_handle);
+					if (ret != 0 || qlril_handle == 0) {
+						QLOGE("QLRIL_Init failure return:%d", ret);
+						qlril_handle = 0;
+					} else {
+						ret = QLRIL_AddUnsolEventsListener(&qlril_handle, processUnsolInd_cb, NULL);
+						if (ret != 0) {
+							ret = QLRIL_Exit(&qlril_handle);
+							if (ret != 0)
+								QLOGE("QLRIL_Exit failed return:%d", ret);
+							qlril_handle = 0;
+						} else {
+							mute_state_old = 1;
+							ret = QLRIL_SetMute(&qlril_handle, mute_state_old);
+							ret = audio_set_volume("PRI_MI2S_RX_Voice Mixer VoiceMMode1", mute_state_old);
+							ret = QLRIL_IMSServerEnable(&qlril_handle, 1); //start IMS server
+							ret = QLRIL_RegisterUnsolEvents(&qlril_handle, 1001, 1001);
+							ret += QLRIL_RegisterUnsolEvents(&qlril_handle, 1051, 1051);
+							if (ret != 0) {
+								ret = QLRIL_Exit(&qlril_handle);
+								if (ret != 0)
+									QLOGE("QLRIL_Exit failed return: %d", ret);
+								qlril_handle = 0;
+							} else {
+								QLOGD("QLRIL_RegisterUnsolEvents success");
+							}
+						}
+
+						QLRIL_SetDefaultTimeout(&qlril_handle, 3);
+					}
+				}
+			} else {
+				if (qlril_handle != 0 && tid != 0) {
+					thread_loop = 0;
+					sleep(1);
+					if (tid != 0) {
+						pthread_join(tid, NULL);
+						tid = 0;
+					}
+				}
+				qlril_handle = 0;
+			}
+		}
+
+		if (qlril_handle == 0 && mcm_handle == 0) {
+			thread_loop = 0;
+			if (tid != 0) {
+				pthread_join(tid, NULL);
+				tid = 0;
+			}
+			sleep(2);
+			continue;
+		}
+
+		if (tid == 0 && (sndHandle == 0 || voiceHandle == 0)) {
+			if (sndHandle == 0) {
+				ret = snd_card_init(&sndHandle);
+				if (ret < 0) {
+					QLOGE("snd_card_init failed:%d", ret);
+					sndHandle = 0;
+					sleep(1);
+					continue;
+				}
+			}
+
+			if (voiceHandle == 0) {
+				ret = snd_card_init(&voiceHandle);
+				if (ret < 0) {
+					QLOGE("snd_card_init failed:%d", ret);
+					voiceHandle = 0;
+					sleep(1);
+					continue;
+				}
+			}
+		}
+
+		if ((tid == 0) && (sndHandle != 0) && (voiceHandle != 0)) {
+			thread_loop = 1;
+			QLOGD("sound card init success");
+			if (mcm_handle != 0) {
+				ret = pthread_create(&tid, NULL, sound_status_switch,
+						(void *)NULL);
+			} else if (qlril_handle != 0) {
+				ret = pthread_create(&tid, NULL, sound_status_switch_for_qlril,
+						(void *)NULL);
+			}
+
+			if (ret != 0) {
+				QLOGE("Error: pthread_create");
+				tid = 0;
+				thread_loop = 0;
+				sleep(1);
+				continue;
+			} else {
+				QLOGD("Create thread success");
+			}
+
+			if (tid != 0 && mcm_handle != 0) {
+				ret = QL_Voice_Call_AddCommonStateHandler(mcm_handle, voice_call_ind_func);
+				if (ret != 0) {
+					ret = QL_Voice_Call_Client_Deinit(mcm_handle);
+					if (ret != 0)
+						QLOGE("Voice Call Deinitial failed");
+					mcm_handle = 0;
+					sleep(1);
+					continue;
+				} else {
+					QLOGE("Voice Call add callback success");
+				}
+			}
+
+			QLOGD("Sound Manager started");
+		}
+
+		soundmgr_config_sync();
+		sleep(3);
+	}
+
+	return 0;
+} /* ----- End of main() ----- */

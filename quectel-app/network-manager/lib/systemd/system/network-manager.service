@@ -1,0 +1,15 @@
+[Unit]
+Description=network manager
+DefaultDependencies=no
+Wants=qlrild.service
+After=systemrw-network_manager.ini.service qlrild.service
+
+[Service]
+Type=forking
+Restart=no
+ExecStart=/usr/bin/network-manager
+
+[Install]
+WantedBy=multi-user.target
+
+

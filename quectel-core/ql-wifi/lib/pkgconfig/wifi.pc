@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=/usr
+libdir=/usr/lib
+includedir=/usr/include
+
+Name:WIFI
+Description: Quectel Api System
+Version: 1.0.0
+Libs: -L${libdir} -lql_wifi
+Cflags: -I${includedir} -I${includedir}/ql_wifi/inc

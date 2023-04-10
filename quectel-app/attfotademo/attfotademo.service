@@ -1,0 +1,12 @@
+[Unit]
+Description=start_attfotademo
+After=mobap-switch.service
+[Service]
+Type=forking
+ExecStart=/etc/initscripts/start_attfotademo start
+ExecStop=/etc/initscripts/start_attfotademo stop	
+RemainAfterExit=yes
+Restart=no
+ExecstartPre=/bin/sleep 10
+[Install]
+WantedBy=multi-user.target

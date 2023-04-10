@@ -1,0 +1,29 @@
+From 896b9f86d37552f8ea4e6f16c2362358c3370938 Mon Sep 17 00:00:00 2001
+From: "tommy.zhang" <tommy.zhang@quectel.com>
+Date: Thu, 2 Jul 2020 10:47:44 +0800
+Subject: [PATCH] set DefaultTimeoutStopSec to 5s
+
+Change-Id: Iba5b15c0d9d35c1246a523bc8016a795a04e3b7b
+---
+ src/core/system.conf | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+ mode change 100644 => 100755 src/core/system.conf
+
+diff --git a/src/core/system.conf b/src/core/system.conf
+old mode 100644
+new mode 100755
+index 746572b..cacfb0a
+--- a/src/core/system.conf
++++ b/src/core/system.conf
+@@ -33,7 +33,7 @@
+ #DefaultStandardOutput=journal
+ #DefaultStandardError=inherit
+ #DefaultTimeoutStartSec=90s
+-#DefaultTimeoutStopSec=90s
++DefaultTimeoutStopSec=5s
+ #DefaultRestartSec=100ms
+ #DefaultStartLimitIntervalSec=10s
+ #DefaultStartLimitBurst=5
+-- 
+2.7.4
+

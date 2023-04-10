@@ -1,0 +1,51 @@
+From 33373fdf1f6ecbb92dacc9e2861d720bc69c475f Mon Sep 17 00:00:00 2001
+From: Chapin Fang <chapin.fang@quectel.com>
+Date: Sun, 25 Oct 2020 14:27:51 +0800
+Subject: [PATCH] =?UTF-8?q?SC20=5FLinux=5FR09:Chapin:GST:=E4=BF=AE?=
+ =?UTF-8?q?=E6=94=B9OMX=20Index=E7=9A=84=E8=B0=83=E7=94=A8=E6=96=B9?=
+ =?UTF-8?q?=E6=B3=95=EF=BC=8C=E6=94=AF=E6=8C=81OMX=5FIndexConfigVideoAVCIn?=
+ =?UTF-8?q?traPeriod=E5=B1=9E=E6=80=A7=E7=9A=84=E8=AE=BE=E7=BD=AE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+详述更改原因：修改OMX Index的调用方法，支持OMX_IndexConfigVideoAVCIntraPeriod属性的设置
+修改点分类  ：内部缺陷修改
+适用哪些项目：
+详述更改内容：
+详述测试方法：软测测试
+软测测试方法：使用gst命令测试，可以正常编码成h264:gst-launch-1.0 quectelmipisrc device=/dev/video1 ! 'video/x-raw, width=1280, height=720,format=NV21' !  videoconvert!  omxh264enc periodicty-idr=45 interval-intraframes = 120 target-bitrate = 4096000 ! filesink location=/data/mpeg.h264
+硬测测试方法：无
+
+Change-Id: Ia03ccd9629514c8546644f9bcda98e1e843b48e0
+---
+ omx/gstomxh264enc.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/omx/gstomxh264enc.c b/omx/gstomxh264enc.c
+index b3bdd9944..8770e1301 100755
+--- a/omx/gstomxh264enc.c
++++ b/omx/gstomxh264enc.c
+@@ -274,8 +274,8 @@ gst_omx_h264_enc_set_format (GstOMXVideoEnc * enc, GstOMXPort * port,
+     config_avcintraperiod.nPortIndex =
+         GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
+     err =
+-        gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+-        OMX_IndexConfigVideoAVCIntraPeriod, &config_avcintraperiod);
++        gst_omx_component_get_config (GST_OMX_VIDEO_ENC (self)->enc,  
++        OMX_IndexConfigVideoAVCIntraPeriod, &config_avcintraperiod); //the config index with OMX_IndexConfig usually get/set with OMX_getConfig/OMX_setConfig
+     if (err != OMX_ErrorNone) {
+       GST_ERROR_OBJECT (self,
+           "can't get OMX_IndexConfigVideoAVCIntraPeriod %s (0x%08x)",
+@@ -298,7 +298,7 @@ gst_omx_h264_enc_set_format (GstOMXVideoEnc * enc, GstOMXPort * port,
+     }
+ 
+     err =
+-        gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
++        gst_omx_component_set_config (GST_OMX_VIDEO_ENC (self)->enc,
+         OMX_IndexConfigVideoAVCIntraPeriod, &config_avcintraperiod);
+     if (err != OMX_ErrorNone) {
+       GST_ERROR_OBJECT (self,
+-- 
+2.23.0
+

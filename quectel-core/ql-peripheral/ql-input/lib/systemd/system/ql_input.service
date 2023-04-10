@@ -1,0 +1,15 @@
+[Unit]
+Description=ql_input
+Before=multi-user.target
+After=ql-power-manager.service
+#After=ql-fb-service.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/environment
+ExecStart=/usr/bin/ql_input
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

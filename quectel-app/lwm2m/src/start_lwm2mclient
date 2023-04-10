@@ -1,0 +1,26 @@
+#! /bin/sh
+
+set -e
+
+case "$1" in
+start)
+    echo -n "Starting lwm2mclient: "
+    start-stop-daemon -S -b -x /usr/bin/lwm2mclient
+    echo "done"
+    ;;
+  stop)
+    echo -n "Stopping lwm2mclient: "
+    start-stop-daemon -K -n /usr/bin/lwm2mclient
+    echo "done"
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  *)
+    echo "Usage lwm2mclient{ start | stop | restart }" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

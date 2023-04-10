@@ -1,0 +1,11 @@
+[Unit]
+Description=mobap-switch
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 20
+ExecStart=/usr/bin/mobap-switch
+
+
+[Install]
+WantedBy=multi-user.target

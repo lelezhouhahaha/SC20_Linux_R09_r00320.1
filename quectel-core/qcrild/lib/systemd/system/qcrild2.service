@@ -1,0 +1,13 @@
+[Unit]
+Description=qcrild2 service
+DefaultDependencies=no
+After=qcrild.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/qcrild -c 2
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

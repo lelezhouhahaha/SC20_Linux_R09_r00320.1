@@ -1,0 +1,15 @@
+[Unit]
+Description=ql-power-manager
+DefaultDependencies=no
+After=quec_launcher.service
+Before=local-fs-pre.target
+
+[Service]
+Type=simple
+Restart=always
+ExecStart=/usr/bin/ql-power-manager
+ExecStop=/sbin/start-stop-daemon -K -n /usr/bin/ql-power-manager
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target.wants

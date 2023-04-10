@@ -1,0 +1,14 @@
+[Unit]
+Description=qcrild service
+DefaultDependencies=no
+After=pm-service.service
+
+[Service]
+Type=simple
+ExecStartPre=-/bin/mkdir -p data/misc/radio
+ExecStart=/usr/bin/qcrild
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

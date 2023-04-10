@@ -1,0 +1,47 @@
+From 1a69bd237604a909451dc04384c386fc177321f0 Mon Sep 17 00:00:00 2001
+From: Chapin Fang <chapin.fang@quectel.com>
+Date: Thu, 2 Apr 2020 18:46:11 +0800
+Subject: [PATCH 2/2] =?UTF-8?q?SC20=5FR09=5Flinux:Chapin:Multimedia:=20?=
+ =?UTF-8?q?=E4=B8=8D=E6=B3=A8=E5=86=8Cv4l2video32=E7=9A=84element=EF=BC=8C?=
+ =?UTF-8?q?=E7=9B=AE=E5=89=8D=E6=88=91=E4=BB=AC=E5=B9=B3=E5=8F=B0=E4=B8=8D?=
+ =?UTF-8?q?=E6=94=AF=E6=8C=81element=E7=9A=84=E8=A7=A3=E7=A0=81?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+详述更改原因：不注册v4l2video32的element，目前我们平台不支持element的解码
+修改点分类  ：内部缺陷修改
+适用哪些项目：该项目
+详述更改内容：不注册v4l2video32的element，目前我们平台不支持element的解码
+详述测试方法：无需测试
+软测测试方法：无需测试
+硬测测试方法：无需测试
+
+Change-Id: Ie183ec606f449d2cd68ae49c359c00915259ceff
+---
+ sys/v4l2/gstv4l2.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/sys/v4l2/gstv4l2.c b/sys/v4l2/gstv4l2.c
+index 340b01b5e..dc2bb3eb9 100755
+--- a/sys/v4l2/gstv4l2.c
++++ b/sys/v4l2/gstv4l2.c
+@@ -182,12 +182,15 @@ gst_v4l2_probe_and_register (GstPlugin * plugin)
+ 
+     basename = g_path_get_basename (it->device_path);
+ 
++//modify by chapin, don't register v4l2video32dec, we can't decode by /dev/video32 directly, we need use openmax api
++#if 0
+     if (gst_v4l2_is_video_dec (sink_caps, src_caps))
+       ret = gst_v4l2_video_dec_register (plugin, basename, it->device_path,
+           sink_caps, src_caps);
+     else if (gst_v4l2_is_transform (sink_caps, src_caps))
+       ret = gst_v4l2_transform_register (plugin, basename, it->device_path,
+           sink_caps, src_caps);
++#endif
+     /* else if ( ... etc. */
+ 
+     gst_caps_unref (sink_caps);
+-- 
+2.23.0
+

@@ -1,0 +1,20 @@
+# Copyright (c) 2017 Qualcomm Technologies, Inc.
+# All Rights Reserved.
+# Confidential and Proprietary - Qualcomm Technologies, Inc.
+
+[Unit]
+Description=ffbm mmi Service
+Wants=ql-power-manager.service
+After=ql-power-manager.service 
+After=thermal-engine.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/environment
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/FCT
+Restart=no
+
+
+[Install]
+WantedBy=ffbm.target

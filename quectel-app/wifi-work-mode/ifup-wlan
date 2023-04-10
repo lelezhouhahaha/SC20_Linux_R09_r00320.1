@@ -1,0 +1,236 @@
+#!/bin/sh
+# FILE:/usr/sbin/ifup-wlan0
+# Copyright (C) 2020 Peeta Chen <peete.chen@quectel.com>
+# This file used to configure the specified network interface device
+cp /var/run/resolv.conf /var/run/resolv.conf.bak
+
+pkill wpa_supplicant
+pkill dnsmasq
+pkill dhcpcd
+
+if [ -z "$network_cfg_dir" ];  then
+    export network_cfg_dir=/etc/misc/wifi
+fi
+
+DEVICE=${1}
+
+[ -z "${DEVICE}" ] && {
+echo $"Usage: $0 <device name>" >&2
+echo $"Usage: $0 <device name> down" >&2
+echo $"Example: $0 wlan0"
+exit 1
+}
+
+if [ ! -d $network_cfg_dir -o ! -f "$network_cfg_dir/ifcfg-${DEVICE}" ]; then
+    echo "$0: configuration<$network_cfg_dir/ifcfg-${DEVICE}> not found." >&2
+    echo "Usage: $0 <device name>" >&2
+    exit 1
+fi
+
+if [ ! -d $network_cfg_dir -o ! -f "$network_cfg_dir/udhcpd.conf" ]; then
+    echo "$0: configuration<$network_cfg_dir/udhcpd.conf> not found." >&2
+    exit 1
+fi
+cp $network_cfg_dir/udhcpd.conf /var/run/udhcpd.conf
+udhcpd_conf=/var/run/udhcpd.conf
+
+if [ ! -d $network_cfg_dir -o ! -f "$network_cfg_dir/hostapd-wlan0.conf" ]; then
+    echo "$0: configuration<$network_cfg_dir/hostapd-wlan0.conf> not found." >&2
+    exit 1
+fi
+hostapd_conf=$network_cfg_dir/hostapd-wlan0.conf
+
+if [ ! -d /sys/class/net/$DEVICE/ ] ; then
+    echo  "Wireless network adapter $DEVICE dosn't exist, exit now..."
+    exit
+fi
+
+cd $network_cfg_dir
+. ifcfg-${DEVICE}
+
+WORKMODE=$(echo $WORKMODE | awk '{ print toupper($0) }')
+if [ $WORKMODE != "STA" ] ; then
+    WORKMODE="AP"
+fi
+
+parser_ip()
+{
+    unset ipaddr netmask
+    ipaddr=$(eval "echo \$IPADDR_$WORKMODE")
+    netmask=$(eval "echo \$NETMASK_$WORKMODE")
+}
+
+stop_wifi_worker()
+{
+    #stop DHCP work on this NIC
+    dhcp_pid=`ps | grep -v grep | grep "dhcp" | awk '{print $1;}'`
+    if [ -n "$dhcp_pid" ] ; then
+        kill $dhcp_pid
+    fi
+    ifconfig $DEVICE 0.0.0.0
+
+    #Stop wpa_supplicant work on STA mode
+    pid=`ps | grep -v grep | grep "wpa_supplicant" | grep $DEVICE | awk '{print $1;}'`
+    if [ -n "$pid" ] ; then
+        kill $pid
+        sleep 1
+    fi
+
+    if [ -d /var/run/wpa_supplicant ] ; then
+        rm -rf /var/run/wpa_supplicant
+    fi
+
+    #Stop hostapd work on AP mode
+    pid=`ps | grep -v grep | grep "hostapd" | awk '{print $1;}'`
+    if [ -n "$pid" ] ; then
+        kill $pid
+        sleep 1
+    fi
+
+    if [ -d /var/run/hostapd ] ; then
+        rm -rf /var/run/hostapd
+    fi
+}
+
+
+configure_wifi_sta()
+{
+    parser_ip
+
+    #If enable DHCP configure or IP address not configured, then use DHCP get IP address and exit
+    if [ -n "$BOOTPROTO" -o -z "$ipaddr" ]; then
+        BOOTPROTO=$(echo $BOOTPROTO | awk '{ print toupper($0) }')
+        if [ "$BOOTPROTO" = "DHCP" ] ; then
+            ifconfig $DEVICE up  
+
+            #Start wpa_supplicant to work now
+            /apps/tools/wpa_supplicant -B -Dwext -i$DEVICE -c${network_cfg_dir}/wpa_supplicant.conf
+            udhcpc -i $DEVICE &
+            exit
+        fi
+    fi
+
+    # Calculate the network configuration value
+    if [ -z "${netmask}" ] ; then
+        eval $(/bin/ipcalc --netmask ${ipaddr}) 
+    fi
+
+    #Configure for the WiFi interface IP address and bring up it
+    ifconfig $DEVICE $ipaddr netmask $netmask up
+
+    #Set the default route
+    DEFROUTE=$(echo $DEFROUTE | awk '{ print toupper($0) }')
+    if [ -n "$GATEWAY" -a "$DEFROUTE" = "YES" ]; then
+        #ip route add  ${NETWORK}/${PREFIX} via $GATEWAY > /dev/null 2>&1
+        ip route replace default via $GATEWAY
+    fi
+
+    #Start wpa_supplicant to work now
+    mkdir -p /var/run/wpa_supplicant
+    /apps/tools/wpa_supplicant -B -Dwext -i$DEVICE -c${network_cfg_dir}/wpa_supplicant.conf
+}
+
+configure_wifi_ap()
+{
+    parser_ip
+
+    i=1
+    unset DNS1 DNS2
+    for c in `cat /etc/resolv.conf | grep nameserver | awk '{print $2;}'`;
+    do
+        if [ -n $c -a $i -lt 3 ]; then
+            if [ $i -eq 1 ] ; then
+                DNS1=$c
+            elif [ $i -eq 2 ] ; then
+                DNS2=$c
+            fi
+            i=$(($i+1))
+        fi
+    done
+    #echo DNS1=$DNS1
+    #echo DNS2=$DNS2
+
+    if [ -z $DNS1 ]; then
+        DNS1=8.8.8.8
+    fi
+
+    if [ -z $DNS2 ]; then
+        DNS2=4.2.2.2
+    fi
+
+    if [ -n $DNS1 -a -n $DNS2 ]; then
+        sed -i '/opt dns/d' $udhcpd_conf
+        echo "opt dns $DNS1 $DNS2" >> $udhcpd_conf
+    fi
+
+    #Configure for the WiFi interface IP address and bring up it
+    if [ -z "$ipaddr" ] ; then
+        ipaddr=192.168.1.2
+        netmask=255.255.255.0
+    fi
+    ifconfig $DEVICE $ipaddr netmask $netmask up
+
+    #Enable DHCP server
+    DHCP_SERVER=$(echo $DHCP_SERVER | awk '{ print toupper($0) }')
+    if [ -n "$DHCP_SERVER" -a "$DHCP_SERVER" = "YES" ]; then
+        conf_file="/tmp/dhcpd_${DEVICE}.conf" 
+        lease_file="/tmp/dhcpd_${DEVICE}.leases"
+        pid_file="/var/run/dhcpd_${DEVICE}.pid" 
+
+        DHCP_SUBNET=`ipcalc -n $DHCP_START_IP $DHCP_NETMASK | awk -F "=" '{print $ 2}'`
+
+        echo "subnet $DHCP_SUBNET netmask $DHCP_NETMASK { " > $conf_file
+        echo "  range $DHCP_START_IP $DHCP_END_IP;" >> $conf_file
+        echo "  option domain-name-servers $DHCP_DNS1, $DHCP_DNS2;" >> $conf_file
+        echo "  option routers $DHCP_GATEWAY;" >> $conf_file
+        echo "  default-lease-time $DHCP_LEASE;" >> $conf_file
+        echo "  max-lease-time 72000;" >> $conf_file
+        echo "  authoritative;" >> $conf_file
+        echo "}" >> $conf_file
+
+        touch $lease_file
+        touch $pid_file
+        #dhcpcd -q -cf $conf_file -lf $lease_file $DEVICE
+        #dhcpcd -q -pf $pid_file -cf $conf_file -lf $lease_file $DEVICE
+        udhcpd $udhcpd_conf
+    fi
+
+    # Start hostapd to server on AP mode
+    mkdir -p /var/run/hostapd
+    hostapd -B $hostapd_conf
+}
+
+if [ -n "$2" -a "$2" = "down" ]; then
+    echo "Shutdown network interface $DEVICE[$NAME] working on $WORKMODE mode." >&2
+    stop_wifi_worker
+    ifconfig $DEVICE down
+    exit
+fi
+
+echo "Enable network interface $DEVICE[$NAME] work on $WORKMODE mode." >&2
+
+if [ $WORKMODE == "STA" ]; then
+    stop_wifi_worker
+    configure_wifi_sta
+else    
+    stop_wifi_worker
+    configure_wifi_ap
+
+    pid=`ps | grep -v grep | grep "hostapd" | awk '{print $1;}'`
+    if [ -n "$pid" ] ; then
+        echo "hostapd is alive." >&2
+        dhcpd_pid=`ps | grep -v grep | grep "dhcpd" | grep $DEVICE | awk '{print $1;}'`
+        if [ -z "$dhcpd_pid" ] ; then
+            echo "dhcpcd is alive." >&2
+            route del default
+            ip route add default dev rmnet_data0
+            echo `sed -n -e '/^ssid=/p' $hostapd_conf`
+            echo `sed -n -e '/^wpa_passphrase=/p' $hostapd_conf`
+	    sleep 5
+	    echo 1 > /proc/sys/net/ipv4/conf/rmnet_data0/proxy_arp
+	    iptables -t nat -A POSTROUTING -o rmnet_data0 -j MASQUERADE --random
+	    echo 1 > /proc/sys/net/ipv4/ip_forward
+	    cp /var/run/resolv.conf.bak /var/run/resolv.conf
+        fi
+    fi
+fi

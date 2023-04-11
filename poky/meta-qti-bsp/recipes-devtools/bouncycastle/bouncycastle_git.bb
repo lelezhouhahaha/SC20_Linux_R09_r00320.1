@@ -15,7 +15,7 @@ LIC_FILES_CHKSUM = "file://../bouncycastle/MODULE_LICENSE_BSD_LIKE;md5=d41d8cd98
 #  bouncycastle git repo
 #######################################
 
-SRC_URI = "git://source.codeaurora.org/quic/la/platform/external/bouncycastle;protocol=git;nobranch=1;rev=a1a3e289e8f788a7757894c4131333ce38e89524;destsuffix=bouncycastle;name=bouncycastle"
+#SRC_URI = "git://source.codeaurora.org/quic/la/platform/external/bouncycastle;protocol=git;nobranch=1;rev=a1a3e289e8f788a7757894c4131333ce38e89524;destsuffix=bouncycastle;name=bouncycastle"
 
 SRC_URI[bouncycastle.md5sum] = "a786faa25a56a3e46331f34b4364575c"
 SRC_URI[bouncycastle.sha256sum] = "909fb1e8ea06a9d6e918b3c5b0800a1f2408724a74e05cb310c019653d758e76"
@@ -26,7 +26,7 @@ S_BC = "${WORKDIR}/bouncycastle"
 #######################################
 #  system/extras git repo
 #######################################
-SRC_URI +=  "git://source.codeaurora.org/quic/la/platform/system/extras;protocol=git;nobranch=1;rev=20fe295659096920d7dfd3f317d4ecc8ef7c3c86;destsuffix=verity;subpath=verity;name=verity"
+#SRC_URI +=  "git://source.codeaurora.org/quic/la/platform/system/extras;protocol=git;nobranch=1;rev=20fe295659096920d7dfd3f317d4ecc8ef7c3c86;destsuffix=verity;subpath=verity;name=verity"
 
 SRC_URI[verity.md5sum] = "ea0bac9d21dcae611ea6bdde97ed4125"
 SRC_URI[verity.sha256sum] = "baa2967bbf0977150265ff878439c55bbd3b2095d7918146f6f9635268fc951e"
@@ -36,7 +36,7 @@ S_VERITY="${WORKDIR}/verity"
 #######################################
 #  keys/certificates git repo
 #######################################
-SRC_URI +=  "git://source.codeaurora.org/quic/la/platform/build;protocol=git;nobranch=1;rev=26bfd792b59eb163dfbc8602a931868fbb35bad4;destsuffix=security;subpath=target/product/security;name=security"
+#SRC_URI +=  "git://source.codeaurora.org/quic/la/platform/build;protocol=git;nobranch=1;rev=26bfd792b59eb163dfbc8602a931868fbb35bad4;destsuffix=security;subpath=target/product/security;name=security"
 
 SRC_URI[security.md5sum] = "1ba8f1041c6f81834450aefc80e78ba8"
 SRC_URI[security.sha256sum] = "2174c4c82d24ec91e94949a3d1eb4fac29cc657b3e35c662c3e80042576fb6b6"
